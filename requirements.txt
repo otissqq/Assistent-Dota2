@@ -1,0 +1,7 @@
+PyQt6>=6.6.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+PyAutoGUI>=0.9.54
+requests>=2.31.0
+google-generativeai>=0.3.0
