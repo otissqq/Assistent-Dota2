@@ -74,6 +74,7 @@ class StatisticsPage(QWidget):
         self.detail_layout.setSpacing(12)
         detail_scroll = QScrollArea()
         detail_scroll.setWidgetResizable(True)
+        detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         detail_scroll.setWidget(self.detail_card)
 
         body.addWidget(left_wrap)

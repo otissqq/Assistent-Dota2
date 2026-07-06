@@ -107,6 +107,7 @@ class HomePage(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(self._wrap(body))
         outer.addWidget(scroll, 1)
 

@@ -26,6 +26,7 @@ class SettingsPage(QWidget):
         outer.addWidget(small_label("Налаштуйте програму під себе"))
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         outer_c = QVBoxLayout(content)
         outer_c.setSpacing(16)

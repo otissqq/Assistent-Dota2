@@ -59,6 +59,7 @@ class HistoryPage(QWidget):
 
         detail_scroll = QScrollArea()
         detail_scroll.setWidgetResizable(True)
+        detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         detail_scroll.setWidget(self.detail_card)
 
         body.addWidget(left_wrap)
@@ -283,7 +284,8 @@ class HistoryPage(QWidget):
         lay.addWidget(concl)
         lay.addStretch()
 
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(w)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(w)
         return scroll
 
     def _legend_dot(self, color, text):
@@ -323,7 +325,8 @@ class HistoryPage(QWidget):
             rl.addWidget(score)
             lay.addWidget(row)
         lay.addStretch()
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(w)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(w)
         return scroll
 
     def _tab_ai(self, r):
@@ -334,7 +337,8 @@ class HistoryPage(QWidget):
         lay.addWidget(body_label(r["ai_explanation"], size=13))
         lay.addWidget(pill("Згенеровано з використанням Gemini 3 Pro"), alignment=Qt.AlignmentFlag.AlignLeft)
         lay.addStretch()
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(w)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(w)
         return scroll
 
     def _tab_details(self, r):
@@ -371,7 +375,8 @@ class HistoryPage(QWidget):
         else:
             lay.addWidget(small_label("Немає даних"))
         lay.addStretch()
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(w)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(w)
         return scroll
 
     def _hline(self):

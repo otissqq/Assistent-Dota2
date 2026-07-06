@@ -36,6 +36,7 @@ class AboutPage(QWidget):
         outer.addWidget(title)
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         lay = QVBoxLayout(content)
         lay.setSpacing(16)
