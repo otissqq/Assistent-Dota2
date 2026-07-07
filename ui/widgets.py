@@ -11,11 +11,23 @@ HERO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 def hero_pixmap(name, size=64):
     path = os.path.join(HERO_DIR, f"{name}.png")
     pix = QPixmap(path) if os.path.exists(path) else QPixmap()
+
     if pix.isNull():
         pix = QPixmap(size, size)
         pix.fill(QColor("#2a2f45"))
-    return pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                       Qt.TransformationMode.SmoothTransformation)
+        return pix
+
+    scaled = pix.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation
+    )
+  
+    x = max(0, (scaled.width() - size) // 2)
+    y = max(0, (scaled.height() - size) // 2)
+
+    return scaled.copy(x, y, size, size)
 
 
 def round_pixmap(pix: QPixmap, radius=10):
