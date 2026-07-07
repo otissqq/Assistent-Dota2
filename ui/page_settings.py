@@ -303,8 +303,19 @@ class SettingsPage(QWidget):
 
     def _check_stratz(self):
         key = self.stratz_key_edit.text().strip()
+
+        if not key:
+            QMessageBox.warning(self, "STRATZ API", "Введіть STRATZ API ключ.")
+            return
+
+        db.set_setting("stratz_api_key", key)
+
         ok, msg = stratz_service.test_connection(key)
-        QMessageBox.information(self, "STRATZ API", msg)
+
+        if ok:
+            QMessageBox.information(self, "STRATZ API", "Ключ збережено.\n" + msg)
+        else:
+            QMessageBox.warning(self, "STRATZ API", "Ключ збережено, але є помилка:\n" + msg)
 
     def _clear_history(self):
         confirm = QMessageBox.question(self, "Очистити історію", "Видалити всю історію аналізів?",

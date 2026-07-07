@@ -1,5 +1,10 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                              QLineEdit, QListWidget, QListWidgetItem, QScrollArea, QFrame, QMessageBox)
+from PIL.Image import item
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QLineEdit, QListWidget, QListWidgetItem, QFrame,
+    QScrollArea, QMessageBox
+)
+
 from PyQt6.QtCore import Qt
 
 from ui.widgets import make_card, card_title, small_label, body_label, pill, hero_pixmap, round_pixmap
@@ -14,9 +19,10 @@ class StatisticsPage(QWidget):
     def __init__(self, app_state, parent=None):
         super().__init__(parent)
         self.app_state = app_state
-        self.heroes = list(HEROES)
+        self.all_heroes = list(HEROES)
+        self.heroes = list(self.all_heroes)
         self.page = 0
-        self.selected_hero = self.heroes[0]
+        self.selected_hero = self.heroes[0] if self.heroes else None
         self._build_ui()
         self.refresh_list()
         self.render_detail(self.selected_hero)
@@ -83,10 +89,14 @@ class StatisticsPage(QWidget):
 
     # ---------------------------------------------------------------- list
     def _on_search(self, text):
-        text = text.lower()
-        self.heroes = [h for h in HEROES if text in h["name"].lower()]
+        text = text.lower().strip()
+        self.heroes = [h for h in self.all_heroes if text in h["name"].lower()]
         self.page = 0
         self.refresh_list()
+
+        if self.heroes:
+            self.selected_hero = self.heroes[0]
+            self.render_detail(self.selected_hero)
 
     def refresh_list(self):
         self.list_widget.clear()
@@ -137,8 +147,16 @@ class StatisticsPage(QWidget):
         return w
 
     def _on_select(self, item):
+        if item is None:
+            return
+
         name = item.data(Qt.ItemDataRole.UserRole)
-        hero = next((h for h in HEROES if h["name"] == name), None)
+
+        hero = next((h for h in self.heroes if h["name"] == name), None)
+
+        if hero is None:
+            hero = next((h for h in self.all_heroes if h["name"] == name), None)
+
         if hero:
             self.selected_hero = hero
             self.render_detail(hero)
@@ -197,13 +215,12 @@ class StatisticsPage(QWidget):
         tag_row.addStretch()
         info.addLayout(tag_row)
         diff_row = QHBoxLayout()
-        diff_row.addWidget(small_label("Складність"))
+    
         diff_row.addStretch()
         info.addLayout(diff_row)
-        diamonds = "".join("◆" if i < h["difficulty"] else "◇" for i in range(5))
-        diff_lbl = QLabel(diamonds)
-        diff_lbl.setStyleSheet("color:#6c5ce7; font-size:14px; letter-spacing:2px; border:none; background:transparent;")
-        info.addWidget(diff_lbl)
+      
+       
+        
         info.addStretch()
         header.addLayout(info, 1)
         self.detail_layout.addLayout(header)
@@ -223,12 +240,8 @@ class StatisticsPage(QWidget):
         meta_lay.addLayout(self._meta_field("🗡 Атака", h["attack"]))
         self.detail_layout.addWidget(meta_card)
 
-        meta_card2 = make_card()
-        meta_lay2 = QHBoxLayout(meta_card2)
-        meta_lay2.setContentsMargins(16, 12, 16, 12)
-        meta_lay2.addLayout(self._meta_field("➕ Додаткові ролі", h["tag"]))
-        meta_lay2.addLayout(self._meta_field("📈 Складність", ["Низька", "Низька", "Середня", "Середня", "Висока"][h["difficulty"] - 1]))
-        self.detail_layout.addWidget(meta_card2)
+        
+       
 
         desc_card = make_card()
         desc_lay = QVBoxLayout(desc_card)
@@ -274,9 +287,47 @@ class StatisticsPage(QWidget):
         return box
 
     def _on_refresh_stats(self):
-        api_key = db.get_setting("stratz_api_key")
-        heroes, used_live, msg = stratz_service.fetch_hero_stats(api_key)
-        ts = stratz_service.now_str()
-        db.set_setting("last_stratz_sync", ts)
-        self.last_update_lbl.setText(f"Останнє оновлення: {ts}")
-        QMessageBox.information(self, "Оновлення статистики", msg)
+        try:
+            api_key = db.get_setting("stratz_api_key")
+
+            heroes, used_live, msg = stratz_service.fetch_hero_stats(api_key)
+
+            if not used_live:
+                QMessageBox.warning(
+                    self,
+                    "STRATZ",
+                    "STRATZ не повернув актуальні дані.\n\n"
+                    f"{msg}\n\n"
+                    "Список героїв не буде перезаписаний кешем."
+                )
+                return
+
+            ts = stratz_service.now_str()
+            db.set_setting("last_stratz_sync", ts)
+
+            if hasattr(self, "last_update_lbl"):
+                self.last_update_lbl.setText(f"Останнє оновлення: {ts}")
+
+            self.all_heroes = list(heroes)
+
+            text = self.search_edit.text().lower().strip()
+            if text:
+                self.heroes = [h for h in self.all_heroes if text in h["name"].lower()]
+            else:
+                self.heroes = list(self.all_heroes)
+
+            self.page = 0
+            self.refresh_list()
+
+            if self.heroes:
+                self.selected_hero = self.heroes[0]
+                self.render_detail(self.selected_hero)
+
+            QMessageBox.information(self, "Оновлення статистики", msg)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Помилка STRATZ",
+                f"Не вдалося оновити статистику.\n\nПомилка:\n{e}"
+            )
