@@ -1,11 +1,13 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                               QLineEdit, QComboBox, QFileDialog, QMessageBox, QScrollArea,
-                              QCheckBox, QGridLayout)
+                              QCheckBox, QGridLayout, QKeySequenceEdit)
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QKeySequence
 
-from ui.widgets import make_card, card_title, small_label, ToggleRow
+from ui.widgets import make_card, card_title, small_label, ToggleRow, AnimatedButton, page_title
+from ui import theme
 import database as db
-from services import stratz_service, gemini_service
+from services import stratz_service, gemini_service, hotkey_service
 
 
 class SettingsPage(QWidget):
@@ -17,15 +19,14 @@ class SettingsPage(QWidget):
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 16, 20, 16)
-        outer.setSpacing(14)
+        outer.setContentsMargins(28, 22, 28, 22)
+        outer.setSpacing(18)
 
-        title = QLabel("⚙  Налаштування")
-        title.setStyleSheet("font-size:20px; font-weight:700; color:#fff; border:none; background:transparent;")
-        outer.addWidget(title)
+        outer.addWidget(page_title("Налаштування", "setting_icon.jpg", "⚙"))
         outer.addWidget(small_label("Налаштуйте програму під себе"))
 
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         content = QWidget()
         outer_c = QVBoxLayout(content)
         outer_c.setSpacing(16)
@@ -44,14 +45,10 @@ class SettingsPage(QWidget):
 
         save_row = QHBoxLayout()
         save_row.addStretch()
-        save_btn = QPushButton("✓  Зберегти налаштування")
-        save_btn.setStyleSheet("""
-            QPushButton { background-color: #6c5ce7; color: white; border-radius: 8px;
-                padding: 12px 22px; font-weight: 700; border: none; }
-            QPushButton:hover { background-color: #7b6cf0; }
-        """)
-        save_btn.clicked.connect(self.on_save)
+        save_btn = AnimatedButton("✓  Зберегти налаштування", radius=8)
+        save_btn.setFixedHeight(44)
         save_row.addWidget(save_btn)
+        save_btn.clicked.connect(self.on_save)
         outer_c.addLayout(save_row)
 
         scroll.setWidget(content)
@@ -60,7 +57,7 @@ class SettingsPage(QWidget):
     def _general_card(self):
         card = make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(12)
         lay.addWidget(card_title("Загальні", "⇄"))
 
@@ -68,7 +65,8 @@ class SettingsPage(QWidget):
         self.lang_combo = lang_row[1]
         lay.addLayout(lang_row[0])
 
-        theme_row = self._combo_row("Тема оформлення", "Оберіть тему інтерфейсу", ["Темна", "Світла"], "Темна")
+        current_theme_label = "Світла" if self.settings.get("theme") == "light" else "Темна"
+        theme_row = self._combo_row("Тема оформлення", "Оберіть тему інтерфейсу", ["Темна", "Світла"], current_theme_label)
         self.theme_combo = theme_row[1]
         lay.addLayout(theme_row[0])
 
@@ -87,24 +85,32 @@ class SettingsPage(QWidget):
     def _screenshot_card(self):
         card = make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(12)
-        lay.addWidget(card_title("Робота зі скриншотами", "📷"))
+        lay.addWidget(card_title("Робота зі скриншотами", "create_screen.png"))
 
         hk_row = QHBoxLayout()
         hk_box = QVBoxLayout(); hk_box.setSpacing(2)
         hk_box.addWidget(self._field_label("Гаряча клавіша для скриншота"))
-        hk_box.addWidget(small_label("Натисніть комбінацію для зміни"))
+        hint = "Клацніть у поле та натисніть комбінацію клавіш"
+        if not hotkey_service.available():
+            hint += "  ⚠ працює лише поки вікно програми активне"
+        else:
+            hint += ("  •  Якщо Dota 2 запущена з правами адміністратора, "
+                     "запустіть і цю програму від імені адміністратора — "
+                     "інакше Windows не дозволить гарячій клавіші спрацювати поверх гри.")
+        hk_box.addWidget(small_label(hint))
         hk_row.addLayout(hk_box)
         hk_row.addStretch()
-        self.hotkey_edit = QLineEdit(self.settings.get("screenshot_hotkey", "F8"))
-        self.hotkey_edit.setFixedWidth(70)
-        self.hotkey_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hotkey_edit = QKeySequenceEdit(QKeySequence(self.settings.get("screenshot_hotkey", "Print Screen")))
+        self.hotkey_edit.setFixedWidth(150)
+        self.hotkey_edit.setMaximumSequenceLength(1)
         hk_row.addWidget(self.hotkey_edit)
-        change_btn = QPushButton("Змінити")
-        change_btn.setStyleSheet(self._secondary_btn_style())
-        change_btn.clicked.connect(self._capture_hotkey)
-        hk_row.addWidget(change_btn)
+        clear_btn = QPushButton("✕")
+        clear_btn.setFixedWidth(32)
+        clear_btn.setStyleSheet(self._secondary_btn_style())
+        clear_btn.clicked.connect(self.hotkey_edit.clear)
+        hk_row.addWidget(clear_btn)
         lay.addLayout(hk_row)
 
         self.auto_open_toggle = ToggleRow("Автоматично відкривати скриншот",
@@ -118,7 +124,9 @@ class SettingsPage(QWidget):
         folder_box.addWidget(small_label("Виберіть папку для збереження зображень"))
         lay.addLayout(folder_box)
         folder_row2 = QHBoxLayout()
-        self.folder_edit = QLineEdit(self.settings.get("screenshot_folder", ""))
+        from services.screenshot_service import _default_folder
+        default_folder = self.settings.get("screenshot_folder") or _default_folder()
+        self.folder_edit = QLineEdit(default_folder)
         folder_row2.addWidget(self.folder_edit, 1)
         browse_btn = QPushButton("📁  Змінити")
         browse_btn.setStyleSheet(self._secondary_btn_style())
@@ -131,9 +139,9 @@ class SettingsPage(QWidget):
     def _gemini_card(self):
         card = make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(10)
-        lay.addWidget(card_title("Gemini (Штучний інтелект)", "✨"))
+        lay.addWidget(card_title("Gemini (Штучний інтелект)", "gemini_logo.webp"))
 
         lay.addWidget(self._field_label("API Key Gemini"))
         lay.addWidget(small_label("Введіть ваш API ключ для Gemini 3 Pro"))
@@ -168,9 +176,9 @@ class SettingsPage(QWidget):
     def _stratz_card(self):
         card = make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(10)
-        lay.addWidget(card_title("STRATZ API", "🌐"))
+        lay.addWidget(card_title("STRATZ API", "stratz_logo.png"))
 
         lay.addWidget(self._field_label("API Key STRATZ"))
         key_row = QHBoxLayout()
@@ -190,7 +198,6 @@ class SettingsPage(QWidget):
 
         status_row = QHBoxLayout()
         status_row.addWidget(small_label("Статус підключення"))
-        status_row.addWidget(small_label("Перевірка підключення до STRATZ API"))
         status_row.addStretch()
         self.stratz_status = self._status_dot(bool(self.settings.get("stratz_api_key")))
         status_row.addWidget(self.stratz_status)
@@ -209,7 +216,7 @@ class SettingsPage(QWidget):
     def _data_card(self):
         card = make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(12)
         lay.addWidget(card_title("Дані та історія", "🗄"))
         row = QHBoxLayout(); row.setSpacing(14)
@@ -274,18 +281,22 @@ class SettingsPage(QWidget):
         lay = QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         dot = QLabel(); dot.setFixedSize(8, 8)
-        dot.setStyleSheet(f"background-color:{'#5ee08a' if connected else '#ef6f7a'}; border-radius:4px;")
+        text = QLabel()
         lay.addWidget(dot)
-        text = QLabel("Підключено" if connected else "Не підключено")
-        text.setStyleSheet(f"color:{'#5ee08a' if connected else '#ef6f7a'}; font-size:12px; font-weight:700; border:none; background:transparent;")
         lay.addWidget(text)
+        w._dot = dot
+        w._text = text
+        self._set_status_widget(w, connected)
         return w
+
+    def _set_status_widget(self, w, connected):
+        color = "#5ee08a" if connected else "#ef6f7a"
+        w._dot.setStyleSheet(f"background-color:{color}; border-radius:4px;")
+        w._text.setText("Підключено" if connected else "Не підключено")
+        w._text.setStyleSheet(f"color:{color}; font-size:12px; font-weight:700; border:none; background:transparent;")
 
     def _toggle_echo(self, edit):
         edit.setEchoMode(QLineEdit.EchoMode.Normal if edit.echoMode() == QLineEdit.EchoMode.Password else QLineEdit.EchoMode.Password)
-
-    def _capture_hotkey(self):
-        QMessageBox.information(self, "Гаряча клавіша", "Натисніть нову клавішу і введіть її назву у полі (наприклад F9).")
 
     def _browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Оберіть папку для скриншотів", self.folder_edit.text())
@@ -303,6 +314,17 @@ class SettingsPage(QWidget):
     def _check_stratz(self):
         key = self.stratz_key_edit.text().strip()
         ok, msg = stratz_service.test_connection(key)
+        if ok:
+            # Persist immediately -- previously the key was only written to
+            # the database when the "Зберегти налаштування" button at the
+            # bottom of the page was pressed, so a successful test here
+            # still left every other screen (e.g. Статистика героїв) using
+            # cached/offline data until the user separately hit Save.
+            ts = stratz_service.now_str()
+            db.set_settings({"stratz_api_key": key, "last_stratz_sync": ts})
+            self.settings = db.get_all_settings()
+            self.last_sync_lbl.setText(ts)
+        self._set_status_widget(self.stratz_status, ok)
         QMessageBox.information(self, "STRATZ API", msg)
 
     def _clear_history(self):
@@ -322,12 +344,13 @@ class SettingsPage(QWidget):
             QMessageBox.information(self, "Експорт завершено", f"Експортовано {count} записів у {path}")
 
     def on_save(self):
+        hotkey_text = self.hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText) or "F8"
         new_settings = {
             "ui_language": self.lang_combo.currentText(),
             "theme": "dark" if self.theme_combo.currentText() == "Темна" else "light",
             "auto_update_stats": "1" if self.auto_update_toggle.checkbox.isChecked() else "0",
             "start_with_windows": "1" if self.autostart_toggle.checkbox.isChecked() else "0",
-            "screenshot_hotkey": self.hotkey_edit.text(),
+            "screenshot_hotkey": hotkey_text,
             "auto_open_screenshot": "1" if self.auto_open_toggle.checkbox.isChecked() else "0",
             "screenshot_folder": self.folder_edit.text(),
             "gemini_api_key": self.gemini_key_edit.text(),
@@ -335,4 +358,10 @@ class SettingsPage(QWidget):
             "stratz_api_key": self.stratz_key_edit.text(),
         }
         db.set_settings(new_settings)
-        QMessageBox.information(self, "Налаштування", "Налаштування успішно збережено.")
+        self.settings = db.get_all_settings()
+        QMessageBox.information(self, "Налаштування", "Налаштування успішно збережено та застосовано.")
+        # Apply the hotkey / theme / language changes live, without needing
+        # a restart. This rebuilds the whole page tree (including this very
+        # widget), so it must run *after* we're done using `self`.
+        if getattr(self.app_state, "on_settings_changed", None):
+            self.app_state.on_settings_changed()

@@ -18,6 +18,17 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            first_name TEXT,
+            last_name TEXT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS analyses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -52,7 +63,7 @@ DEFAULT_SETTINGS = {
     "theme": "dark",
     "auto_update_stats": "1",
     "start_with_windows": "0",
-    "screenshot_hotkey": "F8",
+    "screenshot_hotkey": "Print Screen",
     "auto_open_screenshot": "1",
     "screenshot_folder": os.path.join(os.path.expanduser("~"), "DotaDraftAssistant", "Screenshots"),
     "gemini_api_key": "",

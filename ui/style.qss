@@ -181,6 +181,16 @@ QScrollBar::handle:vertical {
 QScrollBar::handle:vertical:hover { background: #393f5c; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 
+QScrollBar:horizontal {
+    background: transparent; height: 8px; margin: 0;
+}
+QScrollBar::handle:horizontal {
+    background: #2a2f45; border-radius: 4px; min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover { background: #393f5c; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
 QListWidget {
     background-color: transparent;
     border: none;
@@ -189,9 +199,9 @@ QListWidget {
 QListWidget::item {
     background-color: #131625;
     border: 1px solid #1f2436;
-    border-radius: 10px;
-    margin-bottom: 10px;
-    padding: 10px;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    padding: 4px;
 }
 QListWidget::item:selected {
     background-color: #181c30;
