@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                               QFileDialog, QScrollArea, QGridLayout, QFrame, QSizePolicy,
-                              QListWidget, QListWidgetItem, QMessageBox, QStackedLayout)
+                              QListWidget, QListWidgetItem, QMessageBox, QStackedLayout, QInputDialog)
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QPixmap, QIcon
 
@@ -53,7 +53,7 @@ class HomePage(QWidget):
         toolbar.setContentsMargins(18, 16, 18, 16)
         toolbar.setSpacing(14)
 
-        self.btn_upload = QPushButton("  Завантажити скриншот  ▾")
+        self.btn_upload = QPushButton("  Обрати файл")
         self.btn_upload.setProperty("class", "secondary")
         self.btn_upload.setStyleSheet(self._secondary_style())
         upload_icon = _side_icon("upload_screen.png", size=20)
@@ -61,11 +61,19 @@ class HomePage(QWidget):
             self.btn_upload.setIcon(upload_icon)
             self.btn_upload.setIconSize(QSize(20, 20))
         else:
-            self.btn_upload.setText("⬆  Завантажити скриншот  ▾")
-        self.btn_upload.clicked.connect(self.on_upload_clicked)
+            self.btn_upload.setText("⬆  Обрати файл")
+        self.btn_upload.clicked.connect(self._upload_from_file)
         self.btn_upload.setMinimumHeight(56)
         toolbar.addWidget(self.btn_upload)
         toolbar.setAlignment(self.btn_upload, Qt.AlignmentFlag.AlignBottom)
+
+        self.btn_clipboard = QPushButton("  З буфера")
+        self.btn_clipboard.setProperty("class", "secondary")
+        self.btn_clipboard.setStyleSheet(self._secondary_style())
+        self.btn_clipboard.clicked.connect(self._upload_from_clipboard)
+        self.btn_clipboard.setMinimumHeight(56)
+        toolbar.addWidget(self.btn_clipboard)
+        toolbar.setAlignment(self.btn_clipboard, Qt.AlignmentFlag.AlignBottom)
 
         self.btn_capture = QPushButton("  Створити скриншот")
         self.btn_capture.setProperty("class", "secondary")
@@ -141,6 +149,7 @@ class HomePage(QWidget):
         # MIDDLE column (recommendations + AI explanation)
         mid_col = QVBoxLayout()
         mid_col.setSpacing(16)
+        mid_col.addWidget(self._build_meta_card())
         mid_col.addWidget(self._build_recommendations_card())
         mid_col.addWidget(self._build_ai_card())
         mid_wrap = QWidget(); mid_wrap.setLayout(mid_col)
@@ -199,8 +208,16 @@ class HomePage(QWidget):
         lay.setSpacing(10)
         lay.addWidget(card_title("Розпізнані герої", "detect_heroes.webp"))
 
+        ally_head = QHBoxLayout()
         self.ally_title = small_label("Ваша команда (Radiant)")
-        lay.addWidget(self.ally_title)
+        ally_head.addWidget(self.ally_title)
+        ally_head.addStretch()
+        self.btn_add_ally = QPushButton("+ Додати героя")
+        self.btn_add_ally.setStyleSheet(self._secondary_style())
+        self.btn_add_ally.clicked.connect(lambda: self._manual_add_hero("ally"))
+        ally_head.addWidget(self.btn_add_ally)
+        lay.addLayout(ally_head)
+
         self.ally_row = QHBoxLayout()
         self.ally_row.setSpacing(10)
         ally_holder = QWidget(); ally_holder.setLayout(self.ally_row)
@@ -209,8 +226,16 @@ class HomePage(QWidget):
         line = QFrame(); line.setFixedHeight(1); line.setStyleSheet("background-color:#1f2436; border:none;")
         lay.addWidget(line)
 
+        enemy_head = QHBoxLayout()
         self.enemy_title = small_label("Команда суперника (Dire)")
-        lay.addWidget(self.enemy_title)
+        enemy_head.addWidget(self.enemy_title)
+        enemy_head.addStretch()
+        self.btn_add_enemy = QPushButton("+ Додати героя")
+        self.btn_add_enemy.setStyleSheet(self._secondary_style())
+        self.btn_add_enemy.clicked.connect(lambda: self._manual_add_hero("enemy"))
+        enemy_head.addWidget(self.btn_add_enemy)
+        lay.addLayout(enemy_head)
+
         self.enemy_row = QHBoxLayout()
         self.enemy_row.setSpacing(10)
         enemy_holder = QWidget(); enemy_holder.setLayout(self.enemy_row)
@@ -238,6 +263,22 @@ class HomePage(QWidget):
                 self.enemy_row.addWidget(HeroChip(name, square=True, size=64))
         else:
             self.enemy_row.addWidget(small_label("—"))
+
+
+    def _manual_add_hero(self, team_type):
+        all_names = sorted(HERO_BY_NAME.keys())
+        name, ok = QInputDialog.getItem(self, "Додати героя вручну", "Оберіть героя:", all_names, 0, False)
+        if not ok or not name:
+            return
+        if name in self.ally_heroes or name in self.enemy_heroes:
+            QMessageBox.information(self, "Герой вже є", f"{name} вже доданий у драфт.")
+            return
+        target = self.ally_heroes if team_type == "ally" else self.enemy_heroes
+        if len(target) >= 5:
+            QMessageBox.warning(self, "Ліміт", "У команді вже 5 героїв.")
+            return
+        target.append(name)
+        self._render_placeholder_heroes()
 
     def _build_draft_analysis_card(self):
         self.draft_card = make_card()
@@ -350,17 +391,41 @@ class HomePage(QWidget):
             elif item.layout():
                 self._clear_layout(item.layout())
 
-    def _build_recommendations_card(self):
+    def _build_meta_card(self):
         card = make_card()
         lay = QVBoxLayout(card)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(8)
-        lay.addWidget(card_title("Рекомендації (ТОП-5)", "recomendation_default.png"))
+        lay.addWidget(card_title("ТОП-5 поточної мети (STRATZ)", "stratz_logo.png"))
+
+        self.meta_box = QVBoxLayout()
+        self.meta_box.setSpacing(8)
+        holder = QWidget()
+        holder.setLayout(self.meta_box)
+        lay.addWidget(holder)
+
+        self.meta_box.addWidget(small_label("Запустіть аналіз або оновіть статистику, щоб побачити ТОП-5 мети"))
+        return card
+
+    def _build_recommendations_card(self):
+        card = make_card()
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(10)
+        lay.addWidget(card_title("Рекомендований пік для вас", "recomendation_default.png"))
         self.reco_box = QVBoxLayout()
         self.reco_box.setSpacing(8)
         holder = QWidget(); holder.setLayout(self.reco_box)
         lay.addWidget(holder)
-        self.reco_box.addWidget(small_label("Запустіть аналіз, щоб отримати рекомендації"))
+        self.reco_box.addWidget(small_label("Запустіть аналіз, щоб отримати ТОП-5 героїв для вашого піку"))
+
+        lay.addWidget(self._divider())
+        lay.addWidget(card_title("Ймовірний пік суперника", "counterpick.jpeg"))
+        self.enemy_prediction_box = QVBoxLayout()
+        self.enemy_prediction_box.setSpacing(8)
+        enemy_holder = QWidget(); enemy_holder.setLayout(self.enemy_prediction_box)
+        lay.addWidget(enemy_holder)
+        self.enemy_prediction_box.addWidget(small_label("Тут буде прогноз героїв, яких може взяти ворог"))
         return card
 
     def _build_ai_card(self):
@@ -450,40 +515,57 @@ class HomePage(QWidget):
         self.update_side_buttons()
 
     def on_upload_clicked(self):
-        from PyQt6.QtWidgets import QMenu
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background-color:#161a28; border:1px solid #2a2f45; border-radius:8px; padding:6px; color:#e7e9f3; }
-            QMenu::item { padding:8px 16px; border-radius:6px; }
-            QMenu::item:selected { background-color:#2c2768; }
-        """)
-        act_file = menu.addAction("📁  Обрати файл на ПК")
-        act_clip = menu.addAction("📋  Вставити з буфера обміну")
-        chosen = menu.exec(self.btn_upload.mapToGlobal(self.btn_upload.rect().bottomLeft()))
-        if chosen == act_file:
-            self._upload_from_file()
-        elif chosen == act_clip:
-            self._upload_from_clipboard()
+        # Старий варіант відкривав QMenu, через що на деяких Windows/frameless
+        # вікнах меню не показувалось. Тепер клік одразу відкриває вибір файлу.
+        self._upload_from_file()
 
     def _upload_from_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Завантажити скриншот драфту", "",
-                                               "Images (*.png *.jpg *.jpeg)")
-        if path:
-            self._process_screenshot(path)
+        options = QFileDialog.Option.DontUseNativeDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Завантажити скриншот драфту",
+            os.path.expanduser("~"),
+            "Зображення (*.png *.jpg *.jpeg *.bmp *.webp);;Усі файли (*.*)",
+            options=options,
+        )
+        if not path:
+            return
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "Файл", "Файл не знайдено.")
+            return
+        self._process_screenshot(path)
 
     def _upload_from_clipboard(self):
         from PyQt6.QtWidgets import QApplication
-        clipboard = QApplication.clipboard()
-        image = clipboard.image()
-        if image.isNull():
-            QMessageBox.information(self, "Буфер обміну",
-                                     "У буфері обміну немає зображення. Скопіюйте скриншот (Print Screen / Win+Shift+S) і спробуйте ще раз.")
-            return
         import tempfile, time
-        tmp_dir = tempfile.gettempdir()
-        path = os.path.join(tmp_dir, f"clipboard_draft_{int(time.time())}.png")
-        image.save(path, "PNG")
-        self._process_screenshot(path)
+
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+
+        # 1) Якщо в буфері саме зображення (Print Screen / Win+Shift+S)
+        image = clipboard.image()
+        if not image.isNull():
+            tmp_dir = tempfile.gettempdir()
+            path = os.path.join(tmp_dir, f"clipboard_draft_{int(time.time())}.png")
+            if not image.save(path, "PNG"):
+                QMessageBox.warning(self, "Буфер обміну", "Не вдалося зберегти зображення з буфера.")
+                return
+            self._process_screenshot(path)
+            return
+
+        # 2) Якщо в буфер скопійований файл-картинка
+        if mime and mime.hasUrls():
+            for url in mime.urls():
+                local = url.toLocalFile()
+                if local and os.path.exists(local) and local.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp")):
+                    self._process_screenshot(local)
+                    return
+
+        QMessageBox.information(
+            self,
+            "Буфер обміну",
+            "У буфері немає зображення. Скопіюйте скриншот через Print Screen або Win+Shift+S і натисніть «З буфера».",
+        )
 
     def on_capture_clicked(self, from_hotkey=False):
         folder = db.get_setting("screenshot_folder")
@@ -544,25 +626,50 @@ class HomePage(QWidget):
             pass
 
     def _process_screenshot(self, path):
-        self.screenshot_path = path
-        result = vision_service.recognize_draft(path, side=self.side)
-        self.ally_heroes = result["ally_heroes"]
-        self.enemy_heroes = result["enemy_heroes"]
-        self._render_placeholder_heroes()
-
-    def on_analyze_clicked(self):
-        if not self.ally_heroes or not self.enemy_heroes:
-            # auto-fill with sample draft so the button always works, like a real demo
-            result = vision_service.recognize_draft("__no_file__", side=self.side)
-            self.ally_heroes = result["ally_heroes"]
-            self.enemy_heroes = result["enemy_heroes"]
+        try:
+            self.screenshot_path = path
+            result = vision_service.recognize_draft(path, side=self.side)
+            self.ally_heroes = list(result.get("ally_heroes", []))
+            self.enemy_heroes = list(result.get("enemy_heroes", []))
             self._render_placeholder_heroes()
 
-        analysis = analysis_engine.run_full_analysis(self.ally_heroes, self.enemy_heroes, side=self.side)
+            found = len(self.ally_heroes) + len(self.enemy_heroes)
+            if found == 0:
+                QMessageBox.information(
+                    self,
+                    "Скриншот завантажено",
+                    "Скриншот відкрився, але герої не розпізнані. Перевірте debug_cv/last_detection.png або додайте героїв вручну.",
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "Помилка обробки скриншота", str(e))
+
+    def on_analyze_clicked(self):
+        if not self.ally_heroes and not self.enemy_heroes:
+            QMessageBox.warning(
+                self,
+                "Аналіз неможливий",
+                "Спочатку завантажте скриншот або додайте героїв вручну.\n\n"
+                "Програма більше не підставляє героїв автоматично."
+            )
+            return
+
         ai_key = db.get_setting("gemini_api_key")
         ai_lang = db.get_setting("ai_response_language", "Українська")
-        ai_text, used_live = gemini_service.generate_explanation(ai_key, analysis, ai_lang)
-        analysis["ai_text"] = ai_text
+
+        analysis = analysis_engine.run_full_analysis(self.ally_heroes, self.enemy_heroes, side=self.side)
+        assistant_data, used_live = gemini_service.generate_match_assistant(ai_key, analysis, ai_lang)
+
+        analysis["ally_recommendations"] = assistant_data.get("ally_recommendations", analysis.get("ally_recommendations", []))
+        analysis["recommendations"] = analysis["ally_recommendations"]
+        analysis["enemy_predictions"] = assistant_data.get("enemy_predictions", analysis.get("enemy_predictions", []))
+        analysis["strengths"] = assistant_data.get("strengths", analysis.get("strengths", []))
+        analysis["weaknesses"] = assistant_data.get("weaknesses", analysis.get("weaknesses", []))
+        analysis["strategy"] = assistant_data.get("strategy", analysis.get("strategy", []))
+        analysis["synergies"] = assistant_data.get("synergies", analysis.get("synergies", []))
+        analysis["counters"] = assistant_data.get("counters", analysis.get("counters", []))
+        analysis["ai_text"] = assistant_data.get("explanation", "")
+        analysis["used_live_ai"] = used_live
+
         self.last_analysis = analysis
         self._render_analysis(analysis)
         self._save_to_history(analysis)
@@ -599,14 +706,34 @@ class HomePage(QWidget):
         else:
             self.counter_box.addWidget(small_label("Контрпіків не знайдено"))
 
-        # recommendations
-        self._clear_layout(self.reco_box)
+        # TOP-5 current meta from STRATZ/local stats
         medal_colors = ["#f3c34c", "#c8ccdb", "#cd8b50", "#4F46E5", "#4F46E5"]
-        for i, rec in enumerate(a["recommendations"]):
+        if hasattr(self, "meta_box"):
+            self._clear_layout(self.meta_box)
+            meta_recs = a.get("meta_recommendations", [])
+            if meta_recs:
+                for i, rec in enumerate(meta_recs):
+                    self.meta_box.addWidget(self._reco_row(i + 1, rec, medal_colors[i] if i < len(medal_colors) else "#4F46E5"))
+            else:
+                self.meta_box.addWidget(small_label("ТОП-5 мети ще не сформовано"))
+
+        # recommendations for user's next pick
+        self._clear_layout(self.reco_box)
+        for i, rec in enumerate(a.get("ally_recommendations", a.get("recommendations", []))):
             self.reco_box.addWidget(self._reco_row(i + 1, rec, medal_colors[i] if i < len(medal_colors) else "#4F46E5"))
 
-        # AI
+        # predicted enemy picks / dangerous enemy picks
+        self._clear_layout(self.enemy_prediction_box)
+        enemy_predictions = a.get("enemy_predictions", [])
+        if enemy_predictions:
+            for i, rec in enumerate(enemy_predictions):
+                self.enemy_prediction_box.addWidget(self._prediction_row(i + 1, rec))
+        else:
+            self.enemy_prediction_box.addWidget(small_label("Прогноз піків суперника не сформовано"))
+
+        # AI explanation
         self.ai_text.setText(a.get("ai_text", ""))
+        self.ai_badge.setText("✨ Аналіз конкретного матчу через Gemini" if a.get("used_live_ai") else "✨ Локальний аналіз без Gemini")
         self.ai_badge.show()
 
     _MINI_CARD_WIDTH = 92
@@ -705,6 +832,11 @@ class HomePage(QWidget):
         lay.addWidget(arrow)
         return row
 
+    def _prediction_row(self, rank, rec):
+        row = self._reco_row(rank, rec, "#ef6f7a")
+        row.setToolTip("Цей герой не доданий у драфт. Це лише прогноз можливого піку суперника.")
+        return row
+
     def _show_recommendation_details(self, rec):
         """Clicking a Top-5 recommendation now jumps straight to that
         hero's full card on the Статистика page, instead of popping up a
@@ -734,7 +866,8 @@ class HomePage(QWidget):
             "score_enemy": a["enemy_score"],
             "team_heroes": a["team_heroes"],
             "enemy_heroes": a["enemy_heroes"],
-            "recommendations": a["recommendations"],
+            "recommendations": a.get("ally_recommendations", a.get("recommendations", [])),
+            "enemy_predictions": a.get("enemy_predictions", []),
             "strengths": a["strengths"],
             "weaknesses": a["weaknesses"],
             "synergies": a["synergies"],
@@ -766,14 +899,12 @@ class HomePage(QWidget):
         top = QHBoxLayout()
         top.addWidget(small_label(r["created_at"]))
         top.addStretch()
-        result_lbl = QLabel("Перемога" if r["result"] == "win" else "Поразка")
-        result_lbl.setStyleSheet(f"color:{'#5ee08a' if r['result']=='win' else '#ef6f7a'}; font-weight:700; font-size:11px; border:none; background:transparent;")
-        top.addWidget(result_lbl)
+        top.addWidget(small_label(r.get("side", "")))
         lay.addLayout(top)
 
-        score_lbl = QLabel(f"{r['score_team']} - {r['score_enemy']}")
-        score_lbl.setStyleSheet("color:#fff; font-weight:700; font-size:13px; border:none; background:transparent;")
-        lay.addWidget(score_lbl)
+        info_lbl = QLabel("Аналіз драфту")
+        info_lbl.setStyleSheet("color:#fff; font-weight:700; font-size:13px; border:none; background:transparent;")
+        lay.addWidget(info_lbl)
 
         heroes = json.loads(r["team_heroes"])
         row = QHBoxLayout(); row.setSpacing(6)

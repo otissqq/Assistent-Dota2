@@ -196,7 +196,7 @@ def hero_pixmap(name, size=64, w=None, h=None):
     (never a blank/empty box) when the asset file is missing."""
     tw, th = (w, h) if (w and h) else (size, size)
     path = os.path.join(HERO_DIR, f"{name}.png")
-    pix = QPixmap(path) if os.path.exists(path) else QPixmap()
+    pix = load_pixmap(path) if os.path.exists(path) else QPixmap()
     if pix.isNull():
         return _placeholder_pixmap(name, tw, th)
     scaled = pix.scaled(tw, th, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
