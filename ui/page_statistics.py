@@ -114,7 +114,7 @@ class StatisticsPage(QWidget):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(10)
         img = QLabel(); img.setFixedSize(44, 44)
-        img.setPixmap(round_pixmap(hero_pixmap_full(h["name"], 44), 8))
+        img.setPixmap(round_pixmap(hero_pixmap(h["name"], 44), 8))
         img.setStyleSheet("border: 1px solid #262b40; border-radius: 8px; background: transparent;")
         lay.addWidget(img, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -213,7 +213,7 @@ class StatisticsPage(QWidget):
 
         header = QHBoxLayout()
         img = QLabel(); img.setFixedSize(140, 140)
-        img.setPixmap(round_pixmap(hero_pixmap_full(h["name"], 140), 14))
+        img.setPixmap(round_pixmap(hero_pixmap(h["name"], 140), 14))
         img.setStyleSheet(f"border: 2px solid {ATTR_COLORS.get(h['attr'], '#4F46E5')}; border-radius: 14px; background: transparent;")
         header.addWidget(img)
 

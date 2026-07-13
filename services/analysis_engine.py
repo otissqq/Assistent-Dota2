@@ -62,95 +62,293 @@ def radar_scores(team_heroes, enemy_heroes):
     return {"axes": axes, "team": [min(95, v) for v in team_vals], "enemy": [min(95, v) for v in enemy_vals]}
 
 
+
 def recommend_heroes(team_heroes, enemy_heroes, top_n=5):
     """
-    Scores every hero not already in the draft based on:
-      - base winrate
-      - bonus if it synergizes with current team
-      - bonus if it counters an enemy hero
-      - small random "meta" jitter so results feel alive
+    Context-based recommendations for the user's draft.
+
+    Important:
+    - this function is NOT the STRATZ meta top;
+    - it should not simply sort by winrate;
+    - it recommends heroes that close weaknesses of the current draft,
+      create synergy, counter enemy heroes, and fill missing roles.
     """
+    team_heroes = list(team_heroes or [])
+    enemy_heroes = list(enemy_heroes or [])
+
     taken = set(team_heroes) | set(enemy_heroes)
     candidates = [h for h in HEROES if h["name"] not in taken]
+
+    team_roles = [_hero(h).get("role", "Unknown") for h in team_heroes]
+    enemy_roles = [_hero(h).get("role", "Unknown") for h in enemy_heroes]
+    team_attrs = [_hero(h).get("attr", "Universal") for h in team_heroes]
+    enemy_attrs = [_hero(h).get("attr", "Universal") for h in enemy_heroes]
+
+    # What our team probably needs.
+    needed_roles = []
+    if "Carry" not in team_roles:
+        needed_roles.append("Carry")
+    if "Mid" not in team_roles:
+        needed_roles.append("Mid")
+    if not any(r in team_roles for r in ("Offlane", "Initiator", "Durable")):
+        needed_roles.append("Offlane")
+    if team_roles.count("Support") < 2:
+        needed_roles.append("Support")
+    if not any(r in team_roles for r in ("Initiator", "Disabler")):
+        needed_roles.append("Initiator")
+
+    if not needed_roles:
+        needed_roles = ["Support", "Initiator", "Carry", "Mid"]
+
+    # Draft problems.
+    no_control = not any(r in team_roles for r in ("Support", "Initiator", "Disabler"))
+    no_late = "Carry" not in team_roles
+    no_frontline = not any(r in team_roles for r in ("Offlane", "Durable", "Initiator"))
+    many_physical = team_attrs.count("Agility") + team_roles.count("Carry") >= 3
+    many_magic_enemy = enemy_attrs.count("Intelligence") >= 2 or enemy_roles.count("Mid") >= 1
+    enemy_has_mobility = any(_hero(e).get("role") in {"Mid", "Carry"} for e in enemy_heroes)
+
+    # Deterministic variety for different drafts.
+    seed_text = "|".join(sorted(team_heroes) + ["vs"] + sorted(enemy_heroes))
+    seed = sum(ord(ch) for ch in seed_text)
+
     scored = []
     for h in candidates:
-        score = h["win"]
+        name = h["name"]
+        role = h.get("role", "Unknown")
+        tag = h.get("tag", "")
+        attr = h.get("attr", "Universal")
+
+        # Start from neutral score. Winrate is only a very small tie-breaker,
+        # not the main reason.
+        score = 50.0
         reasons = []
+
+        # Fill missing roles.
+        if role in needed_roles:
+            score += 14.0
+            reasons.append(f"закриває потрібну роль {role}")
+        if tag in needed_roles:
+            score += 8.0
+            reasons.append(f"додає потрібну функцію {tag}")
+
+        # Synergy with existing allies.
         for t in team_heroes:
-            if (t, h["name"]) in SYNERGIES or (h["name"], t) in SYNERGIES:
-                score += 5
-                reasons.append(f"синергія з {t}")
+            if (t, name) in SYNERGIES:
+                score += 10.0
+                reasons.append(f"має синергію з {t}")
+            elif (name, t) in SYNERGIES:
+                score += 10.0
+                reasons.append(f"має синергію з {t}")
+
+        # Counter enemy threats.
         for e in enemy_heroes:
-            if e in COUNTERS and h["role"] in {"Initiator", "Offlane", "Support"}:
-                score += 1.5
-        if h["name"] in COUNTERS:
-            score += 4
-            reasons.append(f"контрить {h['name']}")
-        score += random.Random(h["id"] * 13 + len(team_heroes)).uniform(-1.5, 1.5)
-        explanation = _build_reco_explanation(h, team_heroes, enemy_heroes)
+            # If we have a counter record for enemy hero, prefer heroes with control/frontline/support.
+            if e in COUNTERS and role in {"Support", "Initiator", "Offlane", "Mid"}:
+                score += 6.0
+                reasons.append(f"допомагає грати проти {e}")
+            # Universal lightweight logic for common gaps.
+            enemy_role = _hero(e).get("role", "Unknown")
+            if enemy_role in {"Carry", "Mid"} and role in {"Support", "Initiator"}:
+                score += 4.0
+                reasons.append(f"дає контроль проти ключового героя {e}")
+
+        # Fix our draft weaknesses.
+        if no_control and role in {"Support", "Initiator"}:
+            score += 9.0
+            reasons.append("додає контроль, якого не вистачає команді")
+        if no_late and role == "Carry":
+            score += 8.0
+            reasons.append("закриває нестачу лейт-керрі")
+        if no_frontline and role in {"Offlane", "Initiator"}:
+            score += 7.0
+            reasons.append("додає ініціацію або фронтлайн")
+        if many_physical and attr in {"Intelligence", "Universal"}:
+            score += 4.0
+            reasons.append("балансує фізичний драфт магічним впливом")
+        if many_magic_enemy and role in {"Support", "Initiator", "Offlane"}:
+            score += 3.0
+            reasons.append("допомагає пережити магічний тиск суперника")
+        if enemy_has_mobility and role in {"Support", "Initiator"}:
+            score += 3.0
+            reasons.append("корисний проти мобільних героїв")
+
+        # Small meta tie-breaker only.
+        score += float(h.get("win", 50.0) - 50.0) * 0.12
+        score += float(h.get("pick", 0.0)) * 0.04
+        score += ((seed + int(h.get("id", 0)) * 11) % 17) / 20.0
+
+        if not reasons:
+            if role in needed_roles:
+                reasons.append(f"закриває роль {role}")
+            else:
+                reasons.append("може доповнити поточний драфт за роллю та функцією")
+
         scored.append({
-            "name": h["name"], "role": h["role"], "score": round(min(99, score), 1),
-            "explanation": explanation,
+            "name": name,
+            "role": role,
+            "score": round(min(99, max(1, score)), 1),
+            "explanation": ", ".join(dict.fromkeys(reasons[:3])) + ".",
         })
+
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_n]
 
-
-
-def meta_top_heroes(top_n=5):
-    """Top heroes of the current meta based on the currently loaded HEROES data.
-    STRATZ updates win/pick values in HEROES; this function only displays them."""
-    pool = sorted(
-        HEROES,
-        key=lambda h: (float(h.get("win", 0)), float(h.get("pick", 0)), -int(h.get("id", 0))),
-        reverse=True,
-    )
+    # Prefer variety: first take best candidates for needed roles, then fill rest.
     result = []
-    for h in pool[:top_n]:
-        result.append({
-            "name": h["name"],
-            "role": h.get("role", "Unknown"),
-            "score": round(float(h.get("win", 0)), 1),
-            "explanation": f"Сильний герой поточної мети: Win Rate {round(float(h.get('win', 0)), 1)}%, Pick Rate {round(float(h.get('pick', 0)), 1)}%.",
-        })
-    return result
+    used = set()
 
+    for need in needed_roles:
+        for item in scored:
+            hero = _hero(item["name"])
+            if item["name"] in used:
+                continue
+            if item["role"] == need or hero.get("tag") == need:
+                result.append(item)
+                used.add(item["name"])
+                break
+        if len(result) >= top_n:
+            break
+
+    for item in scored:
+        if item["name"] not in used:
+            result.append(item)
+            used.add(item["name"])
+        if len(result) >= top_n:
+            break
+
+    return result[:top_n]
 
 def predict_enemy_picks(team_heroes, enemy_heroes, top_n=5):
-    """Predicts dangerous possible enemy picks. Does not add them to the draft."""
+    """
+    Contextual prediction of enemy picks.
+
+    It does NOT add heroes to the real draft. It only predicts what the enemy
+    may need if their team is incomplete. The old version mostly sorted heroes
+    by winrate, so the same heroes appeared almost every game.
+    """
+    team_heroes = list(team_heroes or [])
+    enemy_heroes = list(enemy_heroes or [])
+
+    slots_left = max(0, 5 - len(enemy_heroes))
+    if slots_left <= 0:
+        return []
+
     taken = set(team_heroes) | set(enemy_heroes)
     candidates = [h for h in HEROES if h["name"] not in taken]
+
     team_roles = [_hero(h).get("role", "Unknown") for h in team_heroes]
+    enemy_roles = [_hero(h).get("role", "Unknown") for h in enemy_heroes]
     team_attrs = [_hero(h).get("attr", "Universal") for h in team_heroes]
+
+    # What the enemy probably still needs in a normal draft.
+    needed_roles = []
+    if "Carry" not in enemy_roles:
+        needed_roles.append("Carry")
+    if "Mid" not in enemy_roles:
+        needed_roles.append("Mid")
+    if not any(r in enemy_roles for r in ("Offlane", "Initiator", "Durable")):
+        needed_roles.append("Offlane")
+    if enemy_roles.count("Support") < 2:
+        needed_roles.append("Support")
+    if not any(r in enemy_roles for r in ("Initiator", "Disabler")):
+        needed_roles.append("Initiator")
+
+    # Keep only as many needs as empty slots, but always leave enough variety.
+    if len(needed_roles) > slots_left:
+        needed_roles = needed_roles[:slots_left]
+    if not needed_roles:
+        needed_roles = ["Carry", "Mid", "Support", "Initiator"][:slots_left]
+
+    # Deterministic small variety: same draft = same result, different draft = different result.
+    seed_text = "|".join(sorted(team_heroes) + ["vs"] + sorted(enemy_heroes))
+    seed = sum(ord(ch) for ch in seed_text)
+
+    # A few lightweight "danger patterns" against the user's current draft.
+    user_has_no_support_control = team_roles.count("Support") == 0
+    user_has_many_strength = team_attrs.count("Strength") >= 2
+    user_has_many_int = team_attrs.count("Intelligence") >= 2
+    user_has_no_late_carry = "Carry" not in team_roles
+
     scored = []
     for h in candidates:
-        score = float(h.get("win", 50.0)) + float(h.get("pick", 0.0)) * 0.35
-        reasons = []
+        name = h["name"]
         role = h.get("role", "Unknown")
+        tag = h.get("tag", "")
         attr = h.get("attr", "Universal")
-        if "Carry" not in team_roles and role in {"Carry", "Mid"}:
+
+        # Base meta weight is intentionally smaller now, so it will not always
+        # show the same global winrate heroes.
+        score = float(h.get("win", 50.0)) * 0.35 + float(h.get("pick", 0.0)) * 0.20
+        reasons = []
+
+        if role in needed_roles:
+            score += 12.0
+            reasons.append(f"закриває роль {role}, якої може не вистачати супернику")
+
+        if tag in needed_roles or tag in {"Disabler", "Nuker", "Pusher", "Durable"}:
+            score += 2.0
+
+        if user_has_no_support_control and (role in {"Initiator", "Support"} or tag in {"Disabler", "Nuker"}):
+            score += 4.0
+            reasons.append("небезпечний проти складу без стабільного контролю")
+
+        if user_has_many_strength and attr in {"Intelligence", "Universal"}:
             score += 3.0
-            reasons.append("може тиснути на неповний керрі-пік")
-        if team_roles.count("Support") == 0 and role in {"Initiator", "Disabler", "Nuker"}:
+            reasons.append("може дати магічний тиск проти силових героїв")
+
+        if user_has_many_int and role in {"Carry", "Initiator"}:
             score += 2.5
-            reasons.append("небезпечний проти складу без сапорт-контролю")
-        if "Strength" in team_attrs and attr in {"Intelligence", "Universal"}:
-            score += 1.5
-            reasons.append("може дати магічний тиск")
-        if role in {"Initiator", "Disabler", "Nuker"}:
-            score += 1.0
-            reasons.append("має потенціал контролю або burst-урону")
+            reasons.append("може швидко вриватися в магів і тиснути по позиції")
+
+        if user_has_no_late_carry and role == "Carry":
+            score += 3.0
+            reasons.append("може переграти вашу команду у лейті")
+
+        # If a hero has direct counter/synergy data, use it as a small signal.
+        for ally in team_heroes:
+            if ally in COUNTERS and role in {"Initiator", "Support", "Carry", "Mid"}:
+                score += 0.8
+
+        # Avoid repeating only the same global-meta heroes every match.
+        # This does not make results random; it just changes order for different drafts.
+        score += ((seed + int(h.get("id", 0)) * 17) % 23) / 10.0
+
         if not reasons:
-            reasons.append("сильний варіант для суперника у поточній меті")
+            if role in needed_roles:
+                reasons.append(f"може закрити роль {role} у драфті суперника")
+            else:
+                reasons.append("контекстний прогноз для неповного ворожого драфту")
+
         scored.append({
-            "name": h["name"],
+            "name": name,
             "role": role,
             "score": round(min(99, score), 1),
             "explanation": "Ймовірний пік ворога: " + ", ".join(reasons[:2]) + ".",
         })
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_n]
 
+    # First choose the best hero for each needed role, then fill the rest.
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    result = []
+    used = set()
+
+    for need in needed_roles:
+        for item in scored:
+            hero = _hero(item["name"])
+            if item["name"] not in used and (item["role"] == need or hero.get("tag") == need):
+                result.append(item)
+                used.add(item["name"])
+                break
+        if len(result) >= top_n:
+            break
+
+    for item in scored:
+        if item["name"] not in used:
+            result.append(item)
+            used.add(item["name"])
+        if len(result) >= top_n:
+            break
+
+    return result[:top_n]
 
 def _build_reco_explanation(hero, team_heroes, enemy_heroes):
     bits = []
@@ -199,6 +397,37 @@ def strategy_tips(enemy_heroes):
     if danger:
         tips.append(f"Фокус на пріоритетних цілях ({', '.join(danger)})")
     return tips
+
+
+
+def meta_top_heroes(top_n=5):
+    """
+    ТОП-5 поточної мети для окремого STRATZ/meta-блоку.
+
+    Тут winrate/pickrate використовуються спеціально, бо це саме блок мети.
+    Рекомендації під конкретний драфт рахуються окремо у recommend_heroes().
+    """
+    pool = []
+    for h in HEROES:
+        try:
+            win = float(h.get("win", 0) or 0)
+        except Exception:
+            win = 0.0
+        try:
+            pick = float(h.get("pick", 0) or 0)
+        except Exception:
+            pick = 0.0
+
+        pool.append({
+            "name": h.get("name", "Unknown"),
+            "role": h.get("role", "Unknown"),
+            "score": round(win, 1),
+            "pick": round(pick, 1),
+            "explanation": f"Герой має сильні показники в поточній меті: winrate {round(win, 1)}%, pickrate {round(pick, 1)}%."
+        })
+
+    pool.sort(key=lambda x: (x["score"], x["pick"]), reverse=True)
+    return pool[:top_n]
 
 
 def run_full_analysis(team_heroes, enemy_heroes, side="Radiant"):

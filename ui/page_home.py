@@ -121,7 +121,7 @@ class HomePage(QWidget):
         toolbar.addLayout(side_box)
         toolbar.setAlignment(side_box, Qt.AlignmentFlag.AlignBottom)
 
-        self.btn_analyze = AnimatedButton("✨  Почати аналіз",
+        self.btn_analyze = AnimatedButton("✨  Почати аналіз\nАналіз займе до 5 секунд",
                                            radius=10, text_color="white",
                                            extra_css="QPushButton{text-align:left;padding:6px 22px;}")
         self.btn_analyze.setMinimumHeight(56)
@@ -252,18 +252,81 @@ class HomePage(QWidget):
                     w = item.widget()
                     w.setParent(None)
                     w.deleteLater()
+
+        # Hide add buttons when a team already has 5 heroes.
+        if hasattr(self, "btn_add_ally"):
+            self.btn_add_ally.setVisible(len(self.ally_heroes) < 5)
+        if hasattr(self, "btn_add_enemy"):
+            self.btn_add_enemy.setVisible(len(self.enemy_heroes) < 5)
+
         if not self.ally_heroes:
-            lbl = small_label("Завантажте скриншот, щоб розпізнати героїв")
+            lbl = small_label("Завантажте скриншот або додайте героїв вручну")
             self.ally_row.addWidget(lbl)
         else:
             for name in self.ally_heroes:
-                self.ally_row.addWidget(HeroChip(name, square=True, size=64))
+                self.ally_row.addWidget(self._removable_hero_chip(name, "ally"))
+
         if self.enemy_heroes:
             for name in self.enemy_heroes:
-                self.enemy_row.addWidget(HeroChip(name, square=True, size=64))
+                self.enemy_row.addWidget(self._removable_hero_chip(name, "enemy"))
         else:
             self.enemy_row.addWidget(small_label("—"))
 
+    def _removable_hero_chip(self, name, team_type):
+        """Hero card with a small delete button.
+
+        team_type: "ally" or "enemy"
+        """
+        wrap = QFrame()
+        wrap.setFixedWidth(76)
+        wrap.setStyleSheet("""
+            QFrame { background: transparent; border: none; }
+            QPushButton {
+                background-color: #2a1620;
+                color: #f0728a;
+                border: 1px solid #4a2233;
+                border-radius: 8px;
+                font-weight: 800;
+                padding: 0px;
+            }
+            QPushButton:hover { background-color: #3a1c29; color: #ffffff; }
+        """)
+
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(3)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.addStretch()
+
+        del_btn = QPushButton("×")
+        del_btn.setFixedSize(18, 18)
+        del_btn.setToolTip(f"Видалити {name}")
+        del_btn.clicked.connect(lambda _, n=name, t=team_type: self._remove_hero(n, t))
+        top.addWidget(del_btn)
+        lay.addLayout(top)
+
+        img = QLabel()
+        img.setFixedSize(64, 64)
+        img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        img.setPixmap(round_pixmap(hero_pixmap_full(name, 64), 10))
+        img.setStyleSheet("border: 1px solid #262b40; border-radius: 10px; background: transparent;")
+        lay.addWidget(img, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        name_lbl = QLabel(name)
+        name_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        name_lbl.setWordWrap(True)
+        name_lbl.setStyleSheet("font-size:9px; color:#e7e9f3; border:none; background:transparent;")
+        lay.addWidget(name_lbl)
+
+        return wrap
+
+    def _remove_hero(self, name, team_type):
+        target = self.ally_heroes if team_type == "ally" else self.enemy_heroes
+        if name in target:
+            target.remove(name)
+            self._render_placeholder_heroes()
 
     def _manual_add_hero(self, team_type):
         all_names = sorted(HERO_BY_NAME.keys())
@@ -412,20 +475,52 @@ class HomePage(QWidget):
         lay = QVBoxLayout(card)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(10)
-        lay.addWidget(card_title("Рекомендований пік для вас", "recomendation_default.png"))
+
+        self.no_missing_pick_label = small_label(
+            "У двох командах уже по 5 героїв. Додаткові піки не показуються."
+        )
+        self.no_missing_pick_label.hide()
+        lay.addWidget(self.no_missing_pick_label)
+
+        # Section: recommended pick for user's selected side
+        self.ally_reco_section = QWidget()
+        ally_lay = QVBoxLayout(self.ally_reco_section)
+        ally_lay.setContentsMargins(0, 0, 0, 0)
+        ally_lay.setSpacing(8)
+        ally_lay.addWidget(card_title("Рекомендований пік для вас", "recomendation_default.png"))
+
         self.reco_box = QVBoxLayout()
         self.reco_box.setSpacing(8)
-        holder = QWidget(); holder.setLayout(self.reco_box)
-        lay.addWidget(holder)
+        holder = QWidget()
+        holder.setLayout(self.reco_box)
+        ally_lay.addWidget(holder)
         self.reco_box.addWidget(small_label("Запустіть аналіз, щоб отримати ТОП-5 героїв для вашого піку"))
+        lay.addWidget(self.ally_reco_section)
 
-        lay.addWidget(self._divider())
-        lay.addWidget(card_title("Ймовірний пік суперника", "counterpick.jpeg"))
+        # Divider between two sections
+        self.reco_divider = self._divider()
+        lay.addWidget(self.reco_divider)
+
+        # Section: enemy predicted picks
+        self.enemy_prediction_section = QWidget()
+        enemy_lay = QVBoxLayout(self.enemy_prediction_section)
+        enemy_lay.setContentsMargins(0, 0, 0, 0)
+        enemy_lay.setSpacing(8)
+        enemy_lay.addWidget(card_title("Ймовірний пік суперника", "counterpick.jpeg"))
+
+        self.enemy_prediction_note = small_label(
+            "Це прогноз, а не реальні герої у драфті. Програма не додає їх автоматично."
+        )
+        enemy_lay.addWidget(self.enemy_prediction_note)
+
         self.enemy_prediction_box = QVBoxLayout()
         self.enemy_prediction_box.setSpacing(8)
-        enemy_holder = QWidget(); enemy_holder.setLayout(self.enemy_prediction_box)
-        lay.addWidget(enemy_holder)
+        enemy_holder = QWidget()
+        enemy_holder.setLayout(self.enemy_prediction_box)
+        enemy_lay.addWidget(enemy_holder)
         self.enemy_prediction_box.addWidget(small_label("Тут буде прогноз героїв, яких може взяти ворог"))
+        lay.addWidget(self.enemy_prediction_section)
+
         return card
 
     def _build_ai_card(self):
@@ -670,6 +765,11 @@ class HomePage(QWidget):
         analysis["ai_text"] = assistant_data.get("explanation", "")
         analysis["used_live_ai"] = used_live
 
+        # Recommendations are shown only for teams that still have free slots.
+        # self.ally_heroes is always the side selected by the user.
+        analysis["show_ally_recommendations"] = len(self.ally_heroes) < 5
+        analysis["show_enemy_predictions"] = len(self.enemy_heroes) < 5
+
         self.last_analysis = analysis
         self._render_analysis(analysis)
         self._save_to_history(analysis)
@@ -717,19 +817,40 @@ class HomePage(QWidget):
             else:
                 self.meta_box.addWidget(small_label("ТОП-5 мети ще не сформовано"))
 
-        # recommendations for user's next pick
-        self._clear_layout(self.reco_box)
-        for i, rec in enumerate(a.get("ally_recommendations", a.get("recommendations", []))):
-            self.reco_box.addWidget(self._reco_row(i + 1, rec, medal_colors[i] if i < len(medal_colors) else "#4F46E5"))
+        # Show recommendations only for sides that have free hero slots.
+        show_ally = a.get("show_ally_recommendations", len(a.get("team_heroes", [])) < 5)
+        show_enemy = a.get("show_enemy_predictions", len(a.get("enemy_heroes", [])) < 5)
 
-        # predicted enemy picks / dangerous enemy picks
+        if hasattr(self, "ally_reco_section"):
+            self.ally_reco_section.setVisible(show_ally)
+        if hasattr(self, "enemy_prediction_section"):
+            self.enemy_prediction_section.setVisible(show_enemy)
+        if hasattr(self, "reco_divider"):
+            self.reco_divider.setVisible(show_ally and show_enemy)
+        if hasattr(self, "no_missing_pick_label"):
+            self.no_missing_pick_label.setVisible(not show_ally and not show_enemy)
+
+        # Recommended pick for user's selected side
+        self._clear_layout(self.reco_box)
+        if show_ally:
+            ally_recs = a.get("ally_recommendations", a.get("recommendations", []))
+            if ally_recs:
+                for i, rec in enumerate(ally_recs):
+                    self.reco_box.addWidget(
+                        self._reco_row(i + 1, rec, medal_colors[i] if i < len(medal_colors) else "#4F46E5")
+                    )
+            else:
+                self.reco_box.addWidget(small_label("Пік для вас не сформовано"))
+
+        # Predicted enemy picks / dangerous enemy picks
         self._clear_layout(self.enemy_prediction_box)
-        enemy_predictions = a.get("enemy_predictions", [])
-        if enemy_predictions:
-            for i, rec in enumerate(enemy_predictions):
-                self.enemy_prediction_box.addWidget(self._prediction_row(i + 1, rec))
-        else:
-            self.enemy_prediction_box.addWidget(small_label("Прогноз піків суперника не сформовано"))
+        if show_enemy:
+            enemy_predictions = a.get("enemy_predictions", [])
+            if enemy_predictions:
+                for i, rec in enumerate(enemy_predictions):
+                    self.enemy_prediction_box.addWidget(self._prediction_row(i + 1, rec))
+            else:
+                self.enemy_prediction_box.addWidget(small_label("Прогноз піків суперника не сформовано"))
 
         # AI explanation
         self.ai_text.setText(a.get("ai_text", ""))
@@ -875,6 +996,8 @@ class HomePage(QWidget):
             "ai_explanation": a.get("ai_text", ""),
             "radar": a["radar"],
             "duration_s": a["duration_s"],
+            "show_ally_recommendations": a.get("show_ally_recommendations", True),
+            "show_enemy_predictions": a.get("show_enemy_predictions", True),
         }
         db.save_analysis(record)
 

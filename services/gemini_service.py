@@ -287,8 +287,8 @@ def generate_match_assistant(api_key: str, analysis: dict, language: str = "Ук
 Моя команда: {analysis.get('team_heroes', [])}
 Команда суперника: {analysis.get('enemy_heroes', [])}
 Кандидати, з яких можна вибирати: {candidate_names}
-Локальні рекомендації для мене: {fallback['ally_recommendations']}
-Локальний прогноз ворога: {fallback['enemy_predictions']}
+Контекстні локальні рекомендації для мене, НЕ просто winrate: {fallback['ally_recommendations']}
+Контекстний локальний прогноз ворога, НЕ просто winrate: {fallback['enemy_predictions']}
 
 Поверни JSON:
 {{
@@ -307,10 +307,14 @@ def generate_match_assistant(api_key: str, analysis: dict, language: str = "Ук
 }}
 
 Правила:
-- ally_recommendations = 5 героїв.
-- enemy_predictions = 5 героїв.
+- ally_recommendations = 5 героїв саме під конкретний драфт користувача.
+- ally_recommendations НЕ мають бути просто топом за winrate. Winrate використовуй тільки як слабкий додатковий фактор.
+- Для ally_recommendations враховуй: ролі, нестачу контролю, лейт-керрі, фронтлайн, синергії та контрпіки проти ворога.
+- enemy_predictions = 5 героїв, але це має бути контекстний прогноз під неповний драфт суперника, а не просто топ winrate.
+- У enemy_predictions враховуй, яких ролей супернику ще може не вистачати.
 - Не повторюй героїв, які вже є у драфті.
 - Не додавай прогнозованих героїв у реальний список команд.
+- STRATZ/winrate має залишатися тільки для блоку поточної мети та сторінки статистики.
 """.strip()
 
     try:
