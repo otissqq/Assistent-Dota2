@@ -1,0 +1,7 @@
+CURRENT DEBUG FILES
+created_at=13.07.2026 22:14:22
+image_path=C:/Users/yarik/DotaDraftAssistant/Screenshots/draft_20260708_190937.png
+image_size=1920x1080
+search_h=81
+detections=9
+heroes=Axe, Chaos Knight, Luna, Witch Doctor, Templar Assassin, Clockwerk, Windranger, Snapfire, Bane
