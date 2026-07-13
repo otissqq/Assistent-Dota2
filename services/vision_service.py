@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
@@ -199,16 +200,33 @@ def _global_match_top_hud(img: np.ndarray, templates: Dict[str, np.ndarray]) -> 
     return selected
 
 
-def _debug_image(full_img: np.ndarray, detections: List[Detection]) -> None:
+def _debug_image(full_img: np.ndarray, detections: List[Detection], image_path: str | None = None) -> None:
+    """Save fresh debug images for the CURRENT screenshot.
+
+    This version matches the global top-HUD detector:
+    _debug_image(img, detections, image_path)
+    """
     try:
         DEBUG_DIR.mkdir(exist_ok=True)
-        vis = full_img.copy()
-        search_h, _, _ = _hud_params(vis.shape[1], vis.shape[0])
-        cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, min(search_h, vis.shape[0]) - 1), (80, 80, 255), 2)
 
+        # Remove stale files so last_detection.png is always from the current screenshot.
+        for old in DEBUG_DIR.glob("last_*.png"):
+            try:
+                old.unlink()
+            except Exception:
+                pass
+
+        vis = full_img.copy()
+        img_h, img_w = vis.shape[:2]
+        search_h, _, _ = _hud_params(img_w, img_h)
+        search_h = min(search_h, img_h)
+
+        # Red = top HUD search area.
+        cv2.rectangle(vis, (0, 0), (img_w - 1, search_h - 1), (80, 80, 255), 2)
+
+        # Green = confirmed detections only.
         for d in detections:
-            color = (70, 255, 120) if d.side == "left" else (255, 160, 80)
-            cv2.rectangle(vis, (d.x, d.y), (d.x + d.w, d.y + d.h), color, 2)
+            cv2.rectangle(vis, (d.x, d.y), (d.x + d.w, d.y + d.h), (70, 255, 120), 2)
             label = f"{d.name} {d.score:.2f}"
             cv2.putText(
                 vis,
@@ -222,7 +240,23 @@ def _debug_image(full_img: np.ndarray, detections: List[Detection]) -> None:
             )
 
         cv2.imwrite(str(DEBUG_DIR / "last_detection.png"), vis)
-        cv2.imwrite(str(DEBUG_DIR / "last_search_area.png"), full_img[:min(search_h, full_img.shape[0]), :])
+        cv2.imwrite(str(DEBUG_DIR / "last_search_area.png"), full_img[:search_h, :])
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cv2.imwrite(str(DEBUG_DIR / f"detection_{stamp}.png"), vis)
+        cv2.imwrite(str(DEBUG_DIR / f"search_area_{stamp}.png"), full_img[:search_h, :])
+
+        (DEBUG_DIR / "debug_info.txt").write_text(
+            "CURRENT DEBUG FILES\n"
+            f"created_at={datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n"
+            f"image_path={image_path or ''}\n"
+            f"image_size={img_w}x{img_h}\n"
+            f"search_h={search_h}\n"
+            f"detections={len(detections)}\n"
+            f"heroes={', '.join(d.name for d in detections)}\n",
+            encoding="utf-8",
+        )
+
     except Exception:
         pass
 
@@ -241,7 +275,7 @@ def recognize_draft(image_path: str, side: str = "Radiant") -> dict:
         return _empty_result("no_templates")
 
     detections = _global_match_top_hud(img, templates)
-    _debug_image(img, detections)
+    _debug_image(img, detections, image_path)
 
     left = [d for d in detections if d.side == "left"]
     right = [d for d in detections if d.side == "right"]
