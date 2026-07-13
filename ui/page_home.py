@@ -121,7 +121,7 @@ class HomePage(QWidget):
         toolbar.addLayout(side_box)
         toolbar.setAlignment(side_box, Qt.AlignmentFlag.AlignBottom)
 
-        self.btn_analyze = AnimatedButton("✨  Почати аналіз\nАналіз займе до 5 секунд",
+        self.btn_analyze = AnimatedButton("✨  Почати аналіз",
                                            radius=10, text_color="white",
                                            extra_css="QPushButton{text-align:left;padding:6px 22px;}")
         self.btn_analyze.setMinimumHeight(56)

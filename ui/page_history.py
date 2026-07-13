@@ -143,15 +143,6 @@ class HistoryPage(QWidget):
         top.addWidget(_side_label(r["side"]))
         lay.addLayout(top)
 
-        mid = QHBoxLayout()
-        result_lbl = QLabel("Перемога" if r["result"] == "win" else "Поразка")
-        result_lbl.setStyleSheet(f"color:{'#5ee08a' if r['result']=='win' else '#ef6f7a'}; font-weight:700; font-size:13px; border:none; background:transparent;")
-        mid.addWidget(result_lbl)
-        mid.addStretch()
-        score_lbl = QLabel(f"{r['score_team']} - {r['score_enemy']}")
-        score_lbl.setStyleSheet("color:#fff; font-weight:700; font-size:13px; border:none; background:transparent;")
-        mid.addWidget(score_lbl)
-        lay.addLayout(mid)
 
         heroes = json.loads(r["team_heroes"])
         row = QHBoxLayout(); row.setSpacing(6)
@@ -206,9 +197,11 @@ class HistoryPage(QWidget):
         title_box = QVBoxLayout()
         title_box.addWidget(small_label(r["created_at"]))
         result_row = QHBoxLayout()
-        result_lbl = QLabel("Перемога" if r["result"] == "win" else "Поразка")
-        result_lbl.setStyleSheet(f"font-size:18px; font-weight:800; color:{'#5ee08a' if r['result']=='win' else '#ef6f7a'}; border:none; background:transparent;")
-        result_row.addWidget(result_lbl)
+        title_lbl = QLabel("Аналіз драфту")
+        title_lbl.setStyleSheet(
+            "font-size:18px; font-weight:800; color:#ffffff; border:none; background:transparent;"
+        )
+        result_row.addWidget(title_lbl)
         result_row.addWidget(_side_label(r["side"], size=16))
         result_row.addStretch()
         title_box.addLayout(result_row)
@@ -431,7 +424,6 @@ class HistoryPage(QWidget):
         result_color = "#5ee08a" if is_win else "#ef6f7a"
 
         lay.addWidget(self._detail_field_box("Сторона", side, value_color=side_color, icon=_side_icon_label(side)))
-        lay.addWidget(self._detail_field_box("Результат", "Перемога" if is_win else "Поразка", value_color=result_color))
         lay.addWidget(self._detail_field_box("Рахунок", f"{r['score_team']} - {r['score_enemy']}"))
         lay.addWidget(self._detail_field_box("Тривалість аналізу", f"{r['duration_s']} с"))
         lay.addWidget(self._detail_field_box("Дата", r["created_at"]))
