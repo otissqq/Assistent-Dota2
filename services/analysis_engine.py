@@ -219,7 +219,7 @@ def run_full_analysis(team_heroes, enemy_heroes, side="Radiant"):
     radar = radar_scores(team_heroes, enemy_heroes)
     team_score = team_strength(team_heroes)
     enemy_score = team_strength(enemy_heroes)
-    duration = round(time.time() - start + random.uniform(1.2, 2.4), 1)
+    duration = round(time.time() - start, 2)
 
     return {
         "side": side,

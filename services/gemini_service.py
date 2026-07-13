@@ -24,11 +24,8 @@ from services import analysis_engine
 # generateContent REST endpoint. The code tries several models so that the app
 # still works if one model is not available for a particular API key.
 GEMINI_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-GEMINI_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-2.5-flash",
-    "gemini-3-flash-preview",
-]
+GEMINI_MODELS = ["gemini-2.0-flash"]
+FAST_GEMINI_TIMEOUT = 6
 
 
 def _hero_names() -> set[str]:
@@ -62,6 +59,7 @@ def _extract_text_from_generate_content(data: dict) -> str:
 
 
 def _call_gemini(api_key: str, prompt: str, timeout: int = 20) -> str:
+    timeout = min(int(timeout or FAST_GEMINI_TIMEOUT), FAST_GEMINI_TIMEOUT)
     if not api_key or len(api_key.strip()) < 8:
         raise ValueError("Gemini API key is empty")
 
@@ -112,7 +110,7 @@ def test_connection(api_key: str) -> tuple[bool, str]:
         text = _call_gemini(
             api_key,
             "Відповідай одним словом українською: працює",
-            timeout=12,
+            timeout=FAST_GEMINI_TIMEOUT,
         )
         return True, "Gemini API підключено успішно. Відповідь моделі: " + text[:80]
     except Exception as e:
@@ -236,10 +234,13 @@ def _validate_recommendations(items, fallback):
     return result[:5]
 
 
-def generate_match_assistant(api_key: str, analysis: dict, language: str = "Українська") -> tuple[dict, bool]:
-    """Match assistant that never modifies the draft.
 
-    Returns ally recommendations, predicted enemy picks, and explanation.
+def generate_match_assistant(api_key: str, analysis: dict, language: str = "Українська") -> tuple[dict, bool]:
+    """Fast AI match assistant.
+
+    The local analysis is rendered immediately if Gemini is missing/slow.
+    Gemini receives only compact candidate lists instead of the whole hero database,
+    so the analysis button works much faster.
     """
     fallback = {
         "ally_recommendations": analysis.get("ally_recommendations") or analysis.get("recommendations", []),
@@ -251,56 +252,85 @@ def generate_match_assistant(api_key: str, analysis: dict, language: str = "Ук
         "counters": analysis.get("counters", []),
         "explanation": _offline_explanation(analysis),
     }
+
     if not api_key:
         return fallback, False
 
     lang = "українською" if language == "Українська" else "English"
-    allowed = [h["name"] for h in HEROES]
+    taken = set(analysis.get("team_heroes", [])) | set(analysis.get("enemy_heroes", []))
+
+    # Short candidate list = much faster Gemini response.
+    candidate_names = []
+    for group_key in ("ally_recommendations", "recommendations", "enemy_predictions", "meta_recommendations"):
+        for item in analysis.get(group_key, []) or []:
+            name = item.get("name") if isinstance(item, dict) else str(item)
+            if name and name not in taken and name not in candidate_names:
+                candidate_names.append(name)
+            if len(candidate_names) >= 35:
+                break
+        if len(candidate_names) >= 35:
+            break
+
+    # If the local engine returned too few candidates, fill from HEROES by winrate.
+    if len(candidate_names) < 20:
+        for h in sorted(HEROES, key=lambda x: x.get("win", 50), reverse=True):
+            name = h.get("name")
+            if name and name not in taken and name not in candidate_names:
+                candidate_names.append(name)
+            if len(candidate_names) >= 35:
+                break
+
     prompt = f"""
-Ти — Dota 2 Draft Assistant. Проаналізуй конкретний матч.
-Відповідай ЛИШЕ JSON без markdown.
-Мова текстів: {lang}
+Ти — Dota 2 Draft Assistant. Дай швидкий аналіз конкретного драфту.
+Відповідай ЛИШЕ JSON без markdown. Мова: {lang}.
 
-Поточний драфт:
-- Моя команда: {analysis.get('team_heroes', [])}
-- Команда суперника: {analysis.get('enemy_heroes', [])}
+Моя команда: {analysis.get('team_heroes', [])}
+Команда суперника: {analysis.get('enemy_heroes', [])}
+Кандидати, з яких можна вибирати: {candidate_names}
+Локальні рекомендації для мене: {fallback['ally_recommendations']}
+Локальний прогноз ворога: {fallback['enemy_predictions']}
 
-Локальний рекомендований пік для мене: {analysis.get('ally_recommendations') or analysis.get('recommendations', [])}
-Локальний прогноз піків суперника: {analysis.get('enemy_predictions', [])}
-Список дозволених героїв Dota 2: {allowed}
+Поверни JSON:
+{{
+  "ally_recommendations": [
+    {{"name": "Hero", "role": "Role", "score": 55.5, "explanation": "коротко чому хороший пік"}}
+  ],
+  "enemy_predictions": [
+    {{"name": "Hero", "role": "Role", "score": 55.5, "explanation": "прогноз, не реальний герой у драфті"}}
+  ],
+  "strengths": ["коротко"],
+  "weaknesses": ["коротко"],
+  "strategy": ["коротко"],
+  "synergies": [{{"pair": ["Hero1", "Hero2"], "desc": "коротко"}}],
+  "counters": [{{"hero": "EnemyHero", "desc": "коротко"}}],
+  "explanation": "1-2 короткі абзаци"
+}}
 
 Правила:
-- НІКОЛИ не додавай героїв у списки team_heroes/enemy_heroes.
-- ally_recommendations = рівно 5 героїв, яких краще обрати мені.
-- enemy_predictions = рівно 5 героїв, яких може обрати суперник або які небезпечні проти мене.
+- ally_recommendations = 5 героїв.
+- enemy_predictions = 5 героїв.
 - Не повторюй героїв, які вже є у драфті.
-- Не вигадуй героїв поза списком дозволених героїв.
-
-Формат JSON:
-{{
-  "ally_recommendations": [{{"name": "Hero", "role": "Role", "score": 55.5, "explanation": "Чому це хороший пік для мене"}}],
-  "enemy_predictions": [{{"name": "Hero", "role": "Role", "score": 55.5, "explanation": "Чому суперник може це взяти або чому це небезпечно"}}],
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "strategy": ["..."],
-  "synergies": [{{"pair": ["Hero1", "Hero2"], "desc": "..."}}],
-  "counters": [{{"hero": "EnemyHero", "desc": "..."}}],
-  "explanation": "2-4 абзаци пояснення"
-}}
+- Не додавай прогнозованих героїв у реальний список команд.
 """.strip()
+
     try:
-        raw = _call_gemini(api_key, prompt, timeout=25)
+        raw = _call_gemini(api_key, prompt, timeout=FAST_GEMINI_TIMEOUT)
         parsed = _extract_json_object(raw)
         result = dict(fallback)
         result.update({k: v for k, v in parsed.items() if v})
-        result["ally_recommendations"] = _validate_recommendations(result.get("ally_recommendations"), fallback["ally_recommendations"])
-        result["enemy_predictions"] = _validate_recommendations(result.get("enemy_predictions"), fallback["enemy_predictions"])
+        result["ally_recommendations"] = _validate_recommendations(
+            result.get("ally_recommendations"),
+            fallback["ally_recommendations"],
+        )
+        result["enemy_predictions"] = _validate_recommendations(
+            result.get("enemy_predictions"),
+            fallback["enemy_predictions"],
+        )
         if not result.get("explanation"):
             result["explanation"] = fallback["explanation"]
         return result, True
     except Exception:
         return fallback, False
-
 
 def suggest_missing_picks(
     api_key: str,
@@ -356,7 +386,7 @@ def suggest_missing_picks(
 """.strip()
 
     try:
-        text = _call_gemini(api_key, prompt, timeout=20)
+        text = _call_gemini(api_key, prompt, timeout=FAST_GEMINI_TIMEOUT)
         data = _extract_json_object(text)
         picks = _normalize_list(data.get("picks", []))
         picks = [p for p in picks if p not in taken][:missing_count]
@@ -373,129 +403,3 @@ def suggest_missing_picks(
     except Exception:
         picks, reason = _fallback_missing_picks(team_heroes, enemy_heroes, missing_count)
         return picks, reason, False
-
-def generate_draft_ai_analysis(
-    api_key: str,
-    team_heroes: list[str],
-    enemy_heroes: list[str],
-    meta_heroes: list[dict],
-    language: str = "Українська",
-) -> tuple[dict, bool]:
-    """
-    Основний AI-аналіз драфту.
-
-    Повертає:
-    - recommended_picks: кого краще взяти вам
-    - enemy_predictions: кого може взяти суперник
-    - strengths: сильні сторони
-    - weaknesses: слабкі сторони
-    - strategy: поради по грі
-    - synergies: синергії
-    - counters: контрпіки
-    - explanation: пояснення
-    """
-
-    # fallback, якщо Gemini не працює
-    local = analysis_engine.run_full_analysis(team_heroes, enemy_heroes)
-
-    fallback = {
-        "recommended_picks": local.get("recommendations", []),
-        "enemy_predictions": [],
-        "strengths": local.get("strengths", []),
-        "weaknesses": local.get("weaknesses", []),
-        "strategy": local.get("strategy", []),
-        "synergies": local.get("synergies", []),
-        "counters": local.get("counters", []),
-        "explanation": _offline_explanation(local),
-    }
-
-    if not api_key:
-        return fallback, False
-
-    all_heroes = [h["name"] for h in HEROES]
-
-    prompt = f"""
-Ти — Dota 2 Draft Assistant.
-
-Проаналізуй конкретний драфт і поверни відповідь СТРОГО у JSON.
-Без markdown, без ```json.
-
-Мова відповіді: {language}
-
-Моя команда:
-{team_heroes if team_heroes else "немає розпізнаних героїв"}
-
-Команда суперника:
-{enemy_heroes if enemy_heroes else "немає розпізнаних героїв"}
-
-ТОП поточної мети зі STRATZ:
-{meta_heroes}
-
-Список усіх доступних героїв Dota 2:
-{all_heroes}
-
-Треба повернути JSON у такому форматі:
-
-{{
-  "recommended_picks": [
-    {{
-      "name": "Hero name",
-      "role": "Support/Mid/Carry/Offlane/Initiator",
-      "score": 85.5,
-      "explanation": "Чому цей герой підходить саме для нашого драфту"
-    }}
-  ],
-  "enemy_predictions": [
-    {{
-      "name": "Hero name",
-      "role": "Support/Mid/Carry/Offlane/Initiator",
-      "score": 75.0,
-      "explanation": "Це ймовірний пік суперника, а не розпізнаний герой"
-    }}
-  ],
-  "strengths": [
-    "сильна сторона драфту"
-  ],
-  "weaknesses": [
-    "слабка сторона драфту"
-  ],
-  "strategy": [
-    "порада по грі"
-  ],
-  "synergies": [
-    {{
-      "pair": ["Hero 1", "Hero 2"],
-      "desc": "опис синергії"
-    }}
-  ],
-  "counters": [
-    {{
-      "hero": "Enemy hero",
-      "desc": "як проти нього грати"
-    }}
-  ],
-  "explanation": "Загальне пояснення аналізу драфту у 2-4 абзаци"
-}}
-
-Правила:
-- recommended_picks = рівно 5 героїв для нашої команди.
-- enemy_predictions = 3-5 ймовірних піків суперника.
-- Не додавай цих героїв у реальний список розпізнаних героїв.
-- Не вигадуй героїв, яких немає у Dota 2.
-- Якщо драфт неповний, аналізуй тільки тих героїв, які реально є.
-- enemy_predictions обов'язково підписуй як прогноз.
-""".strip()
-
-    try:
-        text = _call_gemini(api_key, prompt, timeout=25)
-        data = _extract_json_object(text)
-
-        # якщо Gemini щось не повернув — беремо fallback
-        for key, value in fallback.items():
-            if key not in data or not data[key]:
-                data[key] = value
-
-        return data, True
-
-    except Exception:
-        return fallback, False

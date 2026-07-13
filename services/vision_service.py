@@ -31,6 +31,8 @@ DEBUG_DIR = PROJECT_DIR / "debug_cv"
 MIN_SLOT_SCORE = 0.43
 MIN_SCORE_GAP = 0.045
 
+_TEMPLATE_CACHE: Dict[str, np.ndarray] | None = None
+
 
 @dataclass
 class SlotResult:
@@ -55,14 +57,22 @@ def _read_bgr_8bit(path: Path | str) -> np.ndarray | None:
 
 
 def _load_templates() -> Dict[str, np.ndarray]:
+    global _TEMPLATE_CACHE
+    if _TEMPLATE_CACHE is not None:
+        return _TEMPLATE_CACHE
+
     templates: Dict[str, np.ndarray] = {}
     if not HERO_DIR.is_dir():
+        _TEMPLATE_CACHE = templates
         return templates
+
     for path in HERO_DIR.glob("*.png"):
         img = _read_bgr_8bit(path)
         if img is None or img.size == 0:
             continue
         templates[path.stem] = img
+
+    _TEMPLATE_CACHE = templates
     return templates
 
 
