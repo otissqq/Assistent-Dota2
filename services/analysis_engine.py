@@ -96,6 +96,62 @@ def recommend_heroes(team_heroes, enemy_heroes, top_n=5):
     return scored[:top_n]
 
 
+
+def meta_top_heroes(top_n=5):
+    """Top heroes of the current meta based on the currently loaded HEROES data.
+    STRATZ updates win/pick values in HEROES; this function only displays them."""
+    pool = sorted(
+        HEROES,
+        key=lambda h: (float(h.get("win", 0)), float(h.get("pick", 0)), -int(h.get("id", 0))),
+        reverse=True,
+    )
+    result = []
+    for h in pool[:top_n]:
+        result.append({
+            "name": h["name"],
+            "role": h.get("role", "Unknown"),
+            "score": round(float(h.get("win", 0)), 1),
+            "explanation": f"Сильний герой поточної мети: Win Rate {round(float(h.get('win', 0)), 1)}%, Pick Rate {round(float(h.get('pick', 0)), 1)}%.",
+        })
+    return result
+
+
+def predict_enemy_picks(team_heroes, enemy_heroes, top_n=5):
+    """Predicts dangerous possible enemy picks. Does not add them to the draft."""
+    taken = set(team_heroes) | set(enemy_heroes)
+    candidates = [h for h in HEROES if h["name"] not in taken]
+    team_roles = [_hero(h).get("role", "Unknown") for h in team_heroes]
+    team_attrs = [_hero(h).get("attr", "Universal") for h in team_heroes]
+    scored = []
+    for h in candidates:
+        score = float(h.get("win", 50.0)) + float(h.get("pick", 0.0)) * 0.35
+        reasons = []
+        role = h.get("role", "Unknown")
+        attr = h.get("attr", "Universal")
+        if "Carry" not in team_roles and role in {"Carry", "Mid"}:
+            score += 3.0
+            reasons.append("може тиснути на неповний керрі-пік")
+        if team_roles.count("Support") == 0 and role in {"Initiator", "Disabler", "Nuker"}:
+            score += 2.5
+            reasons.append("небезпечний проти складу без сапорт-контролю")
+        if "Strength" in team_attrs and attr in {"Intelligence", "Universal"}:
+            score += 1.5
+            reasons.append("може дати магічний тиск")
+        if role in {"Initiator", "Disabler", "Nuker"}:
+            score += 1.0
+            reasons.append("має потенціал контролю або burst-урону")
+        if not reasons:
+            reasons.append("сильний варіант для суперника у поточній меті")
+        scored.append({
+            "name": h["name"],
+            "role": role,
+            "score": round(min(99, score), 1),
+            "explanation": "Ймовірний пік ворога: " + ", ".join(reasons[:2]) + ".",
+        })
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:top_n]
+
+
 def _build_reco_explanation(hero, team_heroes, enemy_heroes):
     bits = []
     for e in enemy_heroes:
@@ -147,20 +203,32 @@ def strategy_tips(enemy_heroes):
 
 def run_full_analysis(team_heroes, enemy_heroes, side="Radiant"):
     start = time.time()
-    recs = recommend_heroes(team_heroes, enemy_heroes, top_n=5)
+
+    # Use only heroes that are really present in the draft.
+    # The program no longer auto-fills empty slots with heroes.
+    team_heroes = list(team_heroes or [])
+    enemy_heroes = list(enemy_heroes or [])
+
+    ally_recs = recommend_heroes(team_heroes, enemy_heroes, top_n=5)
+    enemy_predictions = predict_enemy_picks(team_heroes, enemy_heroes, top_n=5)
+    meta_recs = meta_top_heroes(top_n=5)
+
     strengths, weaknesses = strengths_weaknesses(team_heroes, enemy_heroes)
     synergies = compute_synergies(team_heroes)
     counters = compute_counters(enemy_heroes)
     radar = radar_scores(team_heroes, enemy_heroes)
     team_score = team_strength(team_heroes)
     enemy_score = team_strength(enemy_heroes)
-    duration = round(time.time() - start + random.uniform(2.5, 4.2), 1)  # simulate analysis latency for UX
+    duration = round(time.time() - start + random.uniform(1.2, 2.4), 1)
 
     return {
         "side": side,
         "team_heroes": team_heroes,
         "enemy_heroes": enemy_heroes,
-        "recommendations": recs,
+        "recommendations": ally_recs,
+        "ally_recommendations": ally_recs,
+        "enemy_predictions": enemy_predictions,
+        "meta_recommendations": meta_recs,
         "strengths": strengths,
         "weaknesses": weaknesses,
         "strategy": strategy_tips(enemy_heroes),
@@ -170,5 +238,5 @@ def run_full_analysis(team_heroes, enemy_heroes, side="Radiant"):
         "team_score": team_score,
         "enemy_score": enemy_score,
         "duration_s": duration,
-        "result": "win" if team_score >= enemy_score else "loss",
+        "result": "analysis",
     }
