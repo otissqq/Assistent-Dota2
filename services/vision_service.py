@@ -1,11 +1,11 @@
 """
-Computer vision for Dota 2 draft screenshots.
+Computer vision for Dota 2 top HUD / draft screenshots.
 
-This version is tuned for the top Dota 2 HUD / draft row:
-- searches only the top bar, not the whole top 30% of the screen;
-- ignores the middle scoreboard/timer area so it does not mark random UI as heroes;
-- does not auto-fill missing heroes with sample heroes;
-- returns only the heroes that were really detected.
+Important behavior:
+- the program does NOT add fake heroes when the draft is incomplete;
+- it searches only the top hero HUD slots instead of the whole screen;
+- uncertain slots are skipped, so it is better to show fewer heroes than wrong heroes;
+- debug images are saved to debug_cv/last_detection.png and debug_cv/last_search_area.png.
 """
 
 from __future__ import annotations
@@ -17,276 +17,227 @@ from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
+from PIL import Image
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from data.heroes_data import HEROES
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 HERO_DIR = PROJECT_DIR / "assets" / "heroes"
 DEBUG_DIR = PROJECT_DIR / "debug_cv"
 
-# Lower = finds more, but may confuse heroes. Higher = stricter.
-# For small top HUD icons 0.40-0.45 is usually better than 0.50+.
-CONFIDENCE_THRESHOLD = 0.42
-
-# No sample auto-fill. Even 1-2 detections are returned as a partial draft.
-MIN_REAL_DETECTIONS = 1
-
-# Widths for Dota top HUD icons and larger draft portraits.
-# Small widths are important because the top bar icons are much smaller
-# than normal hero portraits.
-TEMPLATE_WIDTHS = [20, 24, 28, 32, 38, 46, 54, 64, 76, 90, 108, 128]
-
-# Center area contains score/timer, not hero icons.
-# Candidates inside this area are ignored.
-CENTER_IGNORE_LEFT = 0.42
-CENTER_IGNORE_RIGHT = 0.58
+# Slot matching thresholds. If a match is too weak or too close to the second
+# result, it is treated as unknown and is not returned.
+MIN_SLOT_SCORE = 0.43
+MIN_SCORE_GAP = 0.045
 
 
 @dataclass
-class Detection:
+class SlotResult:
     name: str
     score: float
+    second_score: float
     x: int
     y: int
     w: int
     h: int
+    side: str  # "left" or "right"
+    slot_index: int
 
 
-def preprocess(image: np.ndarray) -> np.ndarray:
-    """Light preprocessing for template matching."""
-    if image is None or image.size == 0:
-        return image
-
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+def _read_bgr_8bit(path: Path | str) -> np.ndarray | None:
+    """Read image as 8-bit BGR even if PNG is 16-bit."""
+    try:
+        im = Image.open(path).convert("RGB")
+        return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
 
 
 def _load_templates() -> Dict[str, np.ndarray]:
     templates: Dict[str, np.ndarray] = {}
     if not HERO_DIR.is_dir():
         return templates
-
     for path in HERO_DIR.glob("*.png"):
-        img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        img = _read_bgr_8bit(path)
         if img is None or img.size == 0:
             continue
-        templates[path.stem] = preprocess(img)
-
+        templates[path.stem] = img
     return templates
 
 
-def _rect_iou(a: Detection, b: Detection) -> float:
-    ax1, ay1, ax2, ay2 = a.x, a.y, a.x + a.w, a.y + a.h
-    bx1, by1, bx2, by2 = b.x, b.y, b.x + b.w, b.y + b.h
+def _score_slot(slot: np.ndarray, tmpl: np.ndarray) -> float:
+    """Combined score: grayscale structure + color histogram + color distance."""
+    h, w = slot.shape[:2]
+    resized = cv2.resize(tmpl, (w, h), interpolation=cv2.INTER_AREA)
 
-    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    gray_slot = cv2.cvtColor(slot, cv2.COLOR_BGR2GRAY)
+    gray_tmpl = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    corr = float(cv2.matchTemplate(gray_slot, gray_tmpl, cv2.TM_CCOEFF_NORMED)[0, 0])
 
-    inter = iw * ih
-    union = a.w * a.h + b.w * b.h - inter
-    return inter / union if union else 0.0
+    hsv_slot = cv2.cvtColor(slot, cv2.COLOR_BGR2HSV)
+    hsv_tmpl = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV)
+    hist_slot = cv2.calcHist([hsv_slot], [0, 1], None, [18, 10], [0, 180, 0, 256])
+    hist_tmpl = cv2.calcHist([hsv_tmpl], [0, 1], None, [18, 10], [0, 180, 0, 256])
+    cv2.normalize(hist_slot, hist_slot)
+    cv2.normalize(hist_tmpl, hist_tmpl)
+    hist = float(cv2.compareHist(hist_slot, hist_tmpl, cv2.HISTCMP_CORREL))
+
+    mse = float(np.mean((slot.astype(np.float32) - resized.astype(np.float32)) ** 2) / 65025.0)
+    mse_score = max(-1.0, min(1.0, 1.0 - mse * 3.0))
+
+    return 0.35 * corr + 0.35 * hist + 0.30 * mse_score
 
 
-def _top_search_height(img_h: int) -> int:
+def _slot_layout(img_w: int, img_h: int) -> Tuple[int, List[Tuple[str, int, int, int, int, int]]]:
     """
-    Full screenshots and cropped top-bar screenshots need different heights.
+    Returns search height and expected top-HUD slots.
 
-    If the user passes a small cropped HUD image, search about the upper half.
-    If the user passes a full screenshot, search only the real top HUD area.
+    Dota 2 top HUD keeps hero portraits near the center. Ratios are used so it
+    works on 1920x1080, 3840x2160 and screenshots scaled by Windows/OBS.
     """
     if img_h <= 180:
-        return max(24, int(img_h * 0.55))
+        search_h = max(28, int(img_h * 0.65))
+        slot_h = max(22, int(search_h * 0.62))
+        slot_w = max(38, int(slot_h * 1.70))
+        y = 0
+        left_start = int(img_w * 0.27)
+        right_start = int(img_w * 0.55)
+    else:
+        search_h = max(50, min(int(img_h * 0.075), 165))
+        slot_h = max(30, min(int(img_h * 0.036), search_h - 2))
+        slot_w = max(48, min(int(img_w * 0.034), 140))
+        y = 0
+        left_start = int(img_w * 0.276)
+        right_start = int(img_w * 0.547)
 
-    # 1080p -> ~86 px, 2160p -> ~150 px, but do not go too deep.
-    return max(70, min(int(img_h * 0.08), 160))
+    slots: List[Tuple[str, int, int, int, int, int]] = []
+    for i in range(5):
+        slots.append(("left", i, left_start + i * slot_w, y, slot_w, slot_h))
+    for i in range(5):
+        slots.append(("right", i, right_start + i * slot_w, y, slot_w, slot_h))
+    return search_h, slots
 
 
-def _is_in_scoreboard_area(det: Detection, image_width: int) -> bool:
-    cx = (det.x + det.w / 2) / max(1, image_width)
-    return CENTER_IGNORE_LEFT <= cx <= CENTER_IGNORE_RIGHT
+def _match_one_slot(img: np.ndarray, slot, templates: Dict[str, np.ndarray]) -> SlotResult | None:
+    side, slot_index, x, y, w, h = slot
+    img_h, img_w = img.shape[:2]
+    x = max(0, min(x, img_w - 1))
+    y = max(0, min(y, img_h - 1))
+    w = max(1, min(w, img_w - x))
+    h = max(1, min(h, img_h - y))
 
+    crop = img[y:y + h, x:x + w]
+    if crop.size == 0:
+        return None
 
-def _find_best_matches(search_img: np.ndarray, templates: Dict[str, np.ndarray]) -> List[Detection]:
-    """
-    Find portrait matches in the top HUD area.
+    # Remove a tiny border from the slot: top HUD borders / HP strips can confuse matching.
+    pad_x = max(1, int(w * 0.04))
+    pad_y = max(1, int(h * 0.05))
+    inner = crop[pad_y:h - pad_y if h - pad_y > pad_y else h, pad_x:w - pad_x if w - pad_x > pad_x else w]
+    if inner.size == 0:
+        inner = crop
 
-    The old version selected the best 10 matches globally, so it could mark
-    the timer/scoreboard or map background as heroes. This version:
-    - ignores the center scoreboard area;
-    - selects up to 5 detections on the left and up to 5 on the right;
-    - keeps only non-overlapping detections;
-    - returns a partial result if fewer than 10 heroes are found.
-    """
-    candidates: List[Detection] = []
-    img_h, img_w = search_img.shape[:2]
-    gray_search = cv2.cvtColor(search_img, cv2.COLOR_BGR2GRAY)
-
+    scores = []
     for name, tmpl in templates.items():
-        th, tw = tmpl.shape[:2]
-        if th == 0 or tw == 0:
+        try:
+            scores.append((_score_slot(inner, tmpl), name))
+        except Exception:
             continue
+    if not scores:
+        return None
 
-        aspect = th / tw
+    scores.sort(reverse=True)
+    best_score, best_name = scores[0]
+    second_score = scores[1][0] if len(scores) > 1 else -1.0
 
-        for target_w in TEMPLATE_WIDTHS:
-            target_h = max(12, int(target_w * aspect))
+    # Skip uncertain detections instead of showing wrong heroes.
+    if best_score < MIN_SLOT_SCORE:
+        return None
+    if best_score - second_score < MIN_SCORE_GAP:
+        return None
 
-            if target_h >= img_h or target_w >= img_w:
-                continue
-
-            resized = cv2.resize(tmpl, (target_w, target_h), interpolation=cv2.INTER_AREA)
-            gray_tmpl = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-
-            res = cv2.matchTemplate(gray_search, gray_tmpl, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-            det = Detection(
-                name=name,
-                score=float(max_val),
-                x=max_loc[0],
-                y=max_loc[1],
-                w=target_w,
-                h=target_h,
-            )
-
-            if det.score >= CONFIDENCE_THRESHOLD and not _is_in_scoreboard_area(det, img_w):
-                candidates.append(det)
-
-    candidates.sort(key=lambda d: d.score, reverse=True)
-
-    left: List[Detection] = []
-    right: List[Detection] = []
-    used_names = set()
-
-    for det in candidates:
-        if det.name in used_names:
-            continue
-
-        cx = det.x + det.w / 2
-        target = left if cx < img_w / 2 else right
-
-        if len(target) >= 5:
-            continue
-
-        # Same slot / same hero portrait area.
-        if any(_rect_iou(det, old) > 0.22 for old in target):
-            continue
-
-        # Prevent detections that are almost on the same x-position in one side.
-        # It is usually the same HUD slot with another wrong hero name.
-        if any(abs((det.x + det.w / 2) - (old.x + old.w / 2)) < max(det.w, old.w) * 0.55 for old in target):
-            continue
-
-        target.append(det)
-        used_names.add(det.name)
-
-        if len(left) >= 5 and len(right) >= 5:
-            break
-
-    selected = left + right
-    selected.sort(key=lambda d: (d.x, d.y))
-    return selected
+    return SlotResult(best_name, float(best_score), float(second_score), x, y, w, h, side, slot_index)
 
 
-def _split_by_side(detections: List[Detection], image_width: int, side: str) -> Tuple[List[str], List[str]]:
-    """Split detected heroes into Radiant/Dire by top bar side."""
-    left = [d for d in detections if d.x + d.w / 2 < image_width / 2]
-    right = [d for d in detections if d.x + d.w / 2 >= image_width / 2]
-
-    left.sort(key=lambda d: d.x)
-    right.sort(key=lambda d: d.x)
-
-    left_names = [d.name for d in left[:5]]
-    right_names = [d.name for d in right[:5]]
-
-    # In Dota HUD: left side = Radiant, right side = Dire.
-    # If the user plays Dire, their team is on the right.
-    if side == "Dire":
-        return right_names, left_names
-    return left_names, right_names
+def _dedupe_results(results: List[SlotResult]) -> List[SlotResult]:
+    """Do not return the same hero twice; keep the stronger slot."""
+    by_name: Dict[str, SlotResult] = {}
+    for r in results:
+        old = by_name.get(r.name)
+        if old is None or r.score > old.score:
+            by_name[r.name] = r
+    return sorted(by_name.values(), key=lambda r: (0 if r.side == "left" else 1, r.slot_index))
 
 
-def _debug_image(full_img: np.ndarray, search_h: int, detections: List[Detection]) -> None:
+def _debug_image(full_img: np.ndarray, search_h: int, slots, results: List[SlotResult]) -> None:
     try:
         DEBUG_DIR.mkdir(exist_ok=True)
-
         vis = full_img.copy()
-        cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, search_h - 1), (80, 80, 255), 2)
+        cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, min(search_h, vis.shape[0]) - 1), (80, 80, 255), 2)
 
-        # Mark ignored scoreboard zone.
-        x1 = int(vis.shape[1] * CENTER_IGNORE_LEFT)
-        x2 = int(vis.shape[1] * CENTER_IGNORE_RIGHT)
-        cv2.rectangle(vis, (x1, 0), (x2, search_h - 1), (80, 120, 255), 1)
-
-        for d in detections:
-            cv2.rectangle(vis, (d.x, d.y), (d.x + d.w, d.y + d.h), (80, 255, 120), 2)
-            cv2.putText(
-                vis,
-                f"{d.name} {d.score:.2f}",
-                (d.x, max(14, d.y - 4)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.42,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
+        result_by_slot = {(r.side, r.slot_index): r for r in results}
+        for side, idx, x, y, w, h in slots:
+            r = result_by_slot.get((side, idx))
+            color = (70, 255, 120) if r else (0, 215, 255)
+            cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
+            label = f"{r.name} {r.score:.2f}" if r else "?"
+            cv2.putText(vis, label, (x, max(14, y + h + 14)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
 
         cv2.imwrite(str(DEBUG_DIR / "last_detection.png"), vis)
-        cv2.imwrite(str(DEBUG_DIR / "last_search_area.png"), full_img[:search_h, :])
+        cv2.imwrite(str(DEBUG_DIR / "last_search_area.png"), full_img[:min(search_h, full_img.shape[0]), :])
     except Exception:
         pass
 
 
 def _empty_result(source: str = "none") -> dict:
-    return {
-        "ally_heroes": [],
-        "enemy_heroes": [],
-        "confidences": [],
-        "source": source,
-    }
+    return {"ally_heroes": [], "enemy_heroes": [], "confidences": [], "source": source}
 
 
 def recognize_draft(image_path: str, side: str = "Radiant") -> dict:
     """
-    Recognize ally/enemy heroes from a Dota 2 screenshot.
+    Recognize heroes from a screenshot.
 
-    Important:
-    - does not add fake/sample heroes;
-    - if the screenshot is incomplete, returns only detected heroes;
-    - manual input and recommendation logic should handle missing heroes.
+    Left side of top HUD is Radiant, right side is Dire. If user selected Dire,
+    the returned ally/enemy lists are swapped. Missing/uncertain slots are not
+    filled automatically.
     """
-    templates = _load_templates()
-    img = cv2.imread(image_path, cv2.IMREAD_COLOR)
-
+    img = _read_bgr_8bit(image_path)
     if img is None:
         return _empty_result("no_image")
 
+    templates = _load_templates()
     if not templates:
         return _empty_result("no_templates")
 
-    img = preprocess(img)
-    h, w = img.shape[:2]
+    img_h, img_w = img.shape[:2]
+    search_h, slots = _slot_layout(img_w, img_h)
 
-    search_h = _top_search_height(h)
-    search_img = img[:search_h, :]
+    results: List[SlotResult] = []
+    for slot in slots:
+        r = _match_one_slot(img, slot, templates)
+        if r is not None:
+            results.append(r)
 
-    detections = _find_best_matches(search_img, templates)
-    _debug_image(img, search_h, detections)
+    results = _dedupe_results(results)
+    _debug_image(img, search_h, slots, results)
 
-    if len(detections) < MIN_REAL_DETECTIONS:
-        return _empty_result("cv_none")
+    left = [r for r in results if r.side == "left"]
+    right = [r for r in results if r.side == "right"]
+    left.sort(key=lambda r: r.slot_index)
+    right.sort(key=lambda r: r.slot_index)
 
-    ally, enemy = _split_by_side(detections, w, side)
+    left_names = [r.name for r in left[:5]]
+    right_names = [r.name for r in right[:5]]
+
+    if side == "Dire":
+        ally, enemy = right_names, left_names
+    else:
+        ally, enemy = left_names, right_names
 
     return {
-        "ally_heroes": ally[:5],
-        "enemy_heroes": enemy[:5],
-        "confidences": [round(d.score, 3) for d in detections],
-        "source": "cv_partial" if len(detections) < 10 else "cv",
+        "ally_heroes": ally,
+        "enemy_heroes": enemy,
+        "confidences": [round(r.score, 3) for r in results],
+        "source": "cv_partial" if len(results) < 10 else "cv",
     }
