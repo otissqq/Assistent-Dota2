@@ -1,7 +1,2 @@
-.venv/
-venv/
-__pycache__/
-*.pyc
-.env
-*.log
-.DS_Store
+# Created by venv; see https://docs.python.org/3/library/venv.html
+*
